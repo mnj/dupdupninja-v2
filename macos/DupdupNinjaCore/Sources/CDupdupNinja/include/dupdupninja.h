@@ -1,5 +1,5 @@
 // SwiftPM vendored header for the Rust C ABI.
-// Keep this file in sync with `crates/ffi/include/dupdup.h`.
+// Keep this file in sync with `crates/ffi/include/dupdupninja.h`.
 
 #pragma once
 
@@ -18,12 +18,12 @@ typedef enum DupdupStatus {
   DUPDUP_STATUS_NULL_POINTER = 3,
 } DupdupStatus;
 
-DupdupEngine* dupdup_engine_new(void);
-void dupdup_engine_free(DupdupEngine* engine);
+DupdupEngine* dupdupninja_engine_new(void);
+void dupdupninja_engine_free(DupdupEngine* engine);
 
-const char* dupdup_last_error_message(void);
+const char* dupdupninja_last_error_message(void);
 
-DupdupStatus dupdup_scan_folder_to_sqlite(
+DupdupStatus dupdupninja_scan_folder_to_sqlite(
   DupdupEngine* engine,
   const char* root_path,
   const char* db_path
@@ -32,4 +32,3 @@ DupdupStatus dupdup_scan_folder_to_sqlite(
 #ifdef __cplusplus
 } // extern "C"
 #endif
-

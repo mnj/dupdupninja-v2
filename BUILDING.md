@@ -1,4 +1,4 @@
-# Building dupdup
+# Building dupdupninja
 
 This repo contains:
 - A Rust workspace (core logic, CLI, and some UI stubs/skeletons).
@@ -21,7 +21,7 @@ cargo build
 - Run the CLI:
 
 ```bash
-cargo run -p dupdup-cli -- --help
+cargo run -p dupdupninja-cli -- --help
 ```
 
 - Format / lint:
@@ -45,7 +45,7 @@ sudo apt install -y build-essential pkg-config libgtk-4-dev
 GTK is behind a feature so the workspace builds without GTK dev packages.
 
 ```bash
-cargo run -p dupdup-ui-gtk --features gtk
+cargo run -p dupdupninja-ui-gtk --features gtk
 ```
 
 ## Windows 11 (x64)
@@ -58,7 +58,7 @@ cargo run -p dupdup-ui-gtk --features gtk
 
 ### Build/run WinUI 3 app
 
-From `windows/DupdupWinUI`:
+From `windows/DupdupNinjaWinUI`:
 
 ```powershell
 dotnet restore
@@ -74,22 +74,22 @@ dotnet run
 
 ### Rust FFI library
 
-The C ABI wrapper crate is `dupdup-ffi`:
+The C ABI wrapper crate is `dupdupninja-ffi`:
 
 ```bash
-cargo build -p dupdup-ffi
+cargo build -p dupdupninja-ffi
 ```
 
 The exported header is:
-- `crates/ffi/include/dupdup.h`
+- `crates/ffi/include/dupdupninja.h`
 
 ### Swift Package stub
 
-`macos/DupdupCore` is a SwiftPM package that:
-- Vendors the C header as target `CDupdup`
-- Provides a tiny Swift wrapper (`DupdupCore.Engine`)
+`macos/DupdupNinjaCore` is a SwiftPM package that:
+- Vendors the C header as target `CDupdupNinja`
+- Provides a tiny Swift wrapper (`DupdupNinjaCore.Engine`)
 
-From `macos/DupdupCore`:
+From `macos/DupdupNinjaCore`:
 
 ```bash
 swift build

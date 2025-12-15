@@ -1,7 +1,7 @@
 import Foundation
-import CDupdup
+import CDupdupNinja
 
-public enum DupdupError: Error, CustomStringConvertible {
+public enum DupdupNinjaError: Error, CustomStringConvertible {
     case ffiError(String)
 
     public var description: String {
@@ -15,25 +15,24 @@ public final class Engine {
     private let ptr: UnsafeMutablePointer<DupdupEngine>
 
     public init() {
-        self.ptr = dupdup_engine_new()
+        self.ptr = dupdupninja_engine_new()
     }
 
     deinit {
-        dupdup_engine_free(ptr)
+        dupdupninja_engine_free(ptr)
     }
 
     public func scanFolderToSqlite(rootPath: String, dbPath: String) throws {
         let status = rootPath.withCString { rootC in
             dbPath.withCString { dbC in
-                dupdup_scan_folder_to_sqlite(ptr, rootC, dbC)
+                dupdupninja_scan_folder_to_sqlite(ptr, rootC, dbC)
             }
         }
         guard status == DUPDUP_STATUS_OK else {
-            if let cmsg = dupdup_last_error_message() {
-                throw DupdupError.ffiError(String(cString: cmsg))
+            if let cmsg = dupdupninja_last_error_message() {
+                throw DupdupNinjaError.ffiError(String(cString: cmsg))
             }
-            throw DupdupError.ffiError("unknown error")
+            throw DupdupNinjaError.ffiError("unknown error")
         }
     }
 }
-

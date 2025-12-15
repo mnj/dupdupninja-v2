@@ -1,13 +1,12 @@
 [package]
-name = "dupdup-cli"
+name = "dupdupninja-cli"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 
 [[bin]]
-name = "dupdup-cli"
+name = "dupdupninja"
 path = "src/main.rs"
 
 [dependencies]
-dupdup-core = { path = "../core" }
-
+dupdupninja-core = { path = "../core" }

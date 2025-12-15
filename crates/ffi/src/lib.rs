@@ -5,9 +5,9 @@ use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::path::PathBuf;
 
-use dupdup_core::db::SqliteScanStore;
-use dupdup_core::models::ScanRootKind;
-use dupdup_core::scan::{scan_to_sqlite, ScanConfig};
+use dupdupninja_core::db::SqliteScanStore;
+use dupdupninja_core::models::ScanRootKind;
+use dupdupninja_core::scan::{scan_to_sqlite, ScanConfig};
 
 thread_local! {
     static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
@@ -44,14 +44,14 @@ pub enum DupdupStatus {
 }
 
 #[no_mangle]
-pub extern "C" fn dupdup_engine_new() -> *mut DupdupEngine {
+pub extern "C" fn dupdupninja_engine_new() -> *mut DupdupEngine {
     ok_last_error();
     let engine = Box::new(Engine);
     Box::into_raw(engine) as *mut DupdupEngine
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn dupdup_engine_free(engine: *mut DupdupEngine) {
+pub unsafe extern "C" fn dupdupninja_engine_free(engine: *mut DupdupEngine) {
     ok_last_error();
     if engine.is_null() {
         return;
@@ -60,7 +60,7 @@ pub unsafe extern "C" fn dupdup_engine_free(engine: *mut DupdupEngine) {
 }
 
 #[no_mangle]
-pub extern "C" fn dupdup_last_error_message() -> *const c_char {
+pub extern "C" fn dupdupninja_last_error_message() -> *const c_char {
     LAST_ERROR.with(|slot| match &*slot.borrow() {
         Some(msg) => msg.as_ptr(),
         None => std::ptr::null(),
@@ -68,7 +68,7 @@ pub extern "C" fn dupdup_last_error_message() -> *const c_char {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn dupdup_scan_folder_to_sqlite(
+pub unsafe extern "C" fn dupdupninja_scan_folder_to_sqlite(
     engine: *mut DupdupEngine,
     root_path: *const c_char,
     db_path: *const c_char,

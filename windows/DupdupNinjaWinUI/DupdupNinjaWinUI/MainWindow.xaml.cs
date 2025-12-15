@@ -2,7 +2,7 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 
-namespace DupdupWinUI;
+namespace DupdupNinjaWinUI;
 
 public sealed partial class MainWindow : Window
 {
@@ -28,4 +28,3 @@ public sealed partial class MainWindow : Window
         }
     }
 }
-

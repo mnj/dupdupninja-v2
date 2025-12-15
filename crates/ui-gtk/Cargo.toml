@@ -1,19 +1,18 @@
 [package]
-name = "dupdup-ui-gtk"
+name = "dupdupninja-ui-gtk"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 
 [[bin]]
-name = "dupdup-ui-gtk"
+name = "dupdupninja-ui-gtk"
 path = "src/main.rs"
 
 [dependencies]
-dupdup-core = { path = "../core" }
+dupdupninja-core = { path = "../core" }
 
 [features]
 gtk = ["dep:gtk4"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk4 = { version = "0.9", optional = true }
-

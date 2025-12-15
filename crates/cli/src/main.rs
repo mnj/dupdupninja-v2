@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
-use dupdup_core::db::SqliteScanStore;
-use dupdup_core::models::ScanRootKind;
-use dupdup_core::scan::{scan_to_sqlite, ScanConfig};
+use dupdupninja_core::db::SqliteScanStore;
+use dupdupninja_core::models::ScanRootKind;
+use dupdupninja_core::scan::{scan_to_sqlite, ScanConfig};
 
 fn main() {
     if let Err(err) = real_main() {
@@ -11,7 +11,7 @@ fn main() {
     }
 }
 
-fn real_main() -> dupdup_core::Result<()> {
+fn real_main() -> dupdupninja_core::Result<()> {
     let mut args = std::env::args().skip(1);
     let Some(cmd) = args.next() else {
         print_help();
@@ -34,14 +34,20 @@ fn real_main() -> dupdup_core::Result<()> {
                     "--db" => db = args.next().map(PathBuf::from),
                     "--drive" => root_kind = ScanRootKind::Drive,
                     "--folder" => root_kind = ScanRootKind::Folder,
-                    _ => return Err(dupdup_core::Error::InvalidArgument(format!("unknown arg: {arg}"))),
+                    _ => {
+                        return Err(dupdupninja_core::Error::InvalidArgument(format!(
+                            "unknown arg: {arg}"
+                        )));
+                    }
                 }
             }
 
             let root = root.ok_or_else(|| {
-                dupdup_core::Error::InvalidArgument("missing --root <path>".to_string())
+                dupdupninja_core::Error::InvalidArgument("missing --root <path>".to_string())
             })?;
-            let db = db.ok_or_else(|| dupdup_core::Error::InvalidArgument("missing --db <path>".to_string()))?;
+            let db = db.ok_or_else(|| {
+                dupdupninja_core::Error::InvalidArgument("missing --db <path>".to_string())
+            })?;
 
             let store = SqliteScanStore::open(&db)?;
             let cfg = ScanConfig {
@@ -58,7 +64,7 @@ fn real_main() -> dupdup_core::Result<()> {
             );
             Ok(())
         }
-        _ => Err(dupdup_core::Error::InvalidArgument(format!(
+        _ => Err(dupdupninja_core::Error::InvalidArgument(format!(
             "unknown command: {cmd}"
         ))),
     }
@@ -66,10 +72,10 @@ fn real_main() -> dupdup_core::Result<()> {
 
 fn print_help() {
     println!(
-        r#"dupdup-cli
+        r#"dupdupninja
 
 USAGE:
-  dupdup-cli scan --root <path> --db <sqlite_path> [--drive|--folder]
+  dupdupninja scan --root <path> --db <sqlite_path> [--drive|--folder]
 
 NOTES:
   - Scans are stored as standalone SQLite DBs (one per scan).
@@ -77,4 +83,3 @@ NOTES:
 "#
     );
 }
-

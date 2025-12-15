@@ -1,9 +1,9 @@
 <Window
-    x:Class="DupdupWinUI.MainWindow"
+    x:Class="DupdupNinjaWinUI.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:muxc="using:Microsoft.UI.Xaml.Controls"
-    Title="dupdup">
+    Title="dupdupninja">
 
     <Grid>
         <Grid.RowDefinitions>
@@ -21,7 +21,6 @@
             Grid.Row="1"
             Margin="24"
             FontSize="20"
-            Text="dupdup (WinUI 3 skeleton)" />
+            Text="dupdupninja (WinUI 3 skeleton)" />
     </Grid>
 </Window>
-

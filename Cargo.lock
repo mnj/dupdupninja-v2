@@ -113,14 +113,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c74b8349d32d297c9134b8c88677813a227df8f779daa29bfc29c183fe3dca6"
 
 [[package]]
-name = "dupdup-cli"
+name = "dupdupninja-cli"
 version = "0.1.0"
 dependencies = [
- "dupdup-core",
+ "dupdupninja-core",
 ]
 
 [[package]]
-name = "dupdup-core"
+name = "dupdupninja-core"
 version = "0.1.0"
 dependencies = [
  "blake3",
@@ -131,18 +131,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "dupdup-ffi"
+name = "dupdupninja-ffi"
 version = "0.1.0"
 dependencies = [
- "dupdup-core",
+ "dupdupninja-core",
  "libc",
 ]
 
 [[package]]
-name = "dupdup-ui-gtk"
+name = "dupdupninja-ui-gtk"
 version = "0.1.0"
 dependencies = [
- "dupdup-core",
+ "dupdupninja-core",
  "gtk4",
 ]
 

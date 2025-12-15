@@ -1,4 +1,4 @@
-# dupdup-ui-gtk
+# dupdupninja-ui-gtk
 
 GTK4 UI for Linux.
 
@@ -14,6 +14,5 @@ sudo apt install -y libgtk-4-dev pkg-config
 Build/run with the GTK implementation enabled:
 
 ```bash
-cargo run -p dupdup-ui-gtk --features gtk
+cargo run -p dupdupninja-ui-gtk --features gtk
 ```
-

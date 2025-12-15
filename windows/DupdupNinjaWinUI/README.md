@@ -1,7 +1,7 @@
-# DupdupWinUI (WinUI 3, unpackaged)
+# DupdupNinjaWinUI (WinUI 3, unpackaged)
 
 This is a Windows 11 (x64) WinUI 3 UI skeleton using the Windows App SDK.
-It is intended to call into the Rust core via the C ABI in `crates/ffi` (`dupdup-ffi`) once wiring is added.
+It is intended to call into the Rust core via the C ABI in `crates/ffi` (`dupdupninja-ffi`) once wiring is added.
 
 ## Prereqs
 
@@ -11,7 +11,7 @@ It is intended to call into the Rust core via the C ABI in `crates/ffi` (`dupdup
 
 ## Build/run
 
-From `windows/DupdupWinUI`:
+From `windows/DupdupNinjaWinUI`:
 
 ```powershell
 dotnet restore
@@ -21,5 +21,4 @@ dotnet run
 ## Notes
 
 - This project is **unpackaged** (`WindowsPackageType=None`). The Windows App SDK runtime must be present on the machine.
-- Rust interop is planned via the C header `crates/ffi/include/dupdup.h` and a built `dupdup_ffi` library (dll/static).
-
+- Rust interop is planned via the C header `crates/ffi/include/dupdupninja.h` and a built `dupdupninja_ffi` library (dll/static).

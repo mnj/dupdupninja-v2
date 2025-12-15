@@ -1,6 +1,5 @@
 <Application
-    x:Class="DupdupWinUI.App"
+    x:Class="DupdupNinjaWinUI.App"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 </Application>
-

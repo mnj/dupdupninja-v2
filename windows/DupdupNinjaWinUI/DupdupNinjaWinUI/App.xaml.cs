@@ -1,6 +1,6 @@
 using Microsoft.UI.Xaml;
 
-namespace DupdupWinUI;
+namespace DupdupNinjaWinUI;
 
 public sealed partial class App : Application
 {
@@ -17,4 +17,3 @@ public sealed partial class App : Application
         _window.Activate();
     }
 }
-

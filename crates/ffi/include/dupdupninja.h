@@ -18,14 +18,14 @@ typedef enum DupdupStatus {
   DUPDUP_STATUS_NULL_POINTER = 3,
 } DupdupStatus;
 
-DupdupEngine* dupdup_engine_new(void);
-void dupdup_engine_free(DupdupEngine* engine);
+DupdupEngine* dupdupninja_engine_new(void);
+void dupdupninja_engine_free(DupdupEngine* engine);
 
 // Returns a pointer to a thread-local, nul-terminated error message string for the last error.
-// The pointer becomes invalid after the next dupdup call on the same thread.
-const char* dupdup_last_error_message(void);
+// The pointer becomes invalid after the next dupdupninja call on the same thread.
+const char* dupdupninja_last_error_message(void);
 
-DupdupStatus dupdup_scan_folder_to_sqlite(
+DupdupStatus dupdupninja_scan_folder_to_sqlite(
   DupdupEngine* engine,
   const char* root_path,
   const char* db_path
@@ -34,4 +34,3 @@ DupdupStatus dupdup_scan_folder_to_sqlite(
 #ifdef __cplusplus
 } // extern "C"
 #endif
-
