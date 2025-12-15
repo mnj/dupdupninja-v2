@@ -2,6 +2,10 @@
 
 Duplicate/near-duplicate media finder with a shared Rust core and native UIs per platform.
 
+## Building
+
+See `BUILDING.md`.
+
 ## Workspace crates
 - `dupdup-core`: scanning, hashing, SQLite scan storage, and comparison primitives.
 - `dupdup-cli`: early entrypoint for scanning and inspecting scan DBs.
