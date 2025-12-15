@@ -1,0 +1,27 @@
+<Window
+    x:Class="DupdupWinUI.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:muxc="using:Microsoft.UI.Xaml.Controls"
+    Title="dupdup">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <muxc:MenuBar Grid.Row="0">
+            <muxc:MenuBarItem Title="_File">
+                <muxc:MenuFlyoutItem Text="E_xit" Click="Exit_Click" />
+            </muxc:MenuBarItem>
+        </muxc:MenuBar>
+
+        <TextBlock
+            Grid.Row="1"
+            Margin="24"
+            FontSize="20"
+            Text="dupdup (WinUI 3 skeleton)" />
+    </Grid>
+</Window>
+

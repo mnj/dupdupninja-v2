@@ -15,6 +15,7 @@ This repo starts as a Rust workspace with a compiling skeleton; platform UIs are
 - `crates/ui-windows`: Windows native UI skeleton (Win32 via `windows` crate) guarded by feature/cfg.
 - `crates/ui-macos`: macOS native UI stub (real AppKit code guarded by feature/cfg).
 - `macos/DupdupCore`: Swift Package stub that imports the C header and provides a small Swift wrapper for SwiftUI apps.
+- `windows/DupdupWinUI`: WinUI 3 (Windows App SDK) unpackaged C# UI skeleton (planned to call Rust via `dupdup-ffi`).
 
 ## Conventions
 - Keep platform-specific code behind `cfg(target_os = "...")` and/or explicit Cargo features.
