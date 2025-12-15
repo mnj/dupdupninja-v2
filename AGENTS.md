@@ -3,7 +3,7 @@
 ## Goal
 Build `dupdup`, a cross-platform duplicate/near-duplicate media finder with:
 - A shared Rust core (scanning, hashing, comparison, storage).
-- Native UIs per platform (Linux: GTK4; Windows: modern Win UI; macOS: native Cocoa/AppKit).
+- Native UIs per platform (Linux: GTK4; Windows: WinUI 3; macOS: SwiftUI).
 
 This repo starts as a Rust workspace with a compiling skeleton; platform UIs are stubbed behind features until their native toolchains/deps are wired up.
 
@@ -12,8 +12,6 @@ This repo starts as a Rust workspace with a compiling skeleton; platform UIs are
 - `crates/cli`: CLI wrapper over the core (`dupdup-cli`). This is the default runnable entry early on.
 - `crates/ffi`: C-ABI wrapper (`dupdup-ffi`) for non-Rust UIs (Swift/SwiftUI, etc.).
 - `crates/ui-gtk`: Linux GTK4 UI stub (real GTK4 code guarded by feature/cfg).
-- `crates/ui-windows`: Windows native UI skeleton (Win32 via `windows` crate) guarded by feature/cfg.
-- `crates/ui-macos`: macOS native UI stub (real AppKit code guarded by feature/cfg).
 - `macos/DupdupCore`: Swift Package stub that imports the C header and provides a small Swift wrapper for SwiftUI apps.
 - `windows/DupdupWinUI`: WinUI 3 (Windows App SDK) unpackaged C# UI skeleton (planned to call Rust via `dupdup-ffi`).
 

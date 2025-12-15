@@ -50,24 +50,6 @@ cargo run -p dupdup-ui-gtk --features gtk
 
 ## Windows 11 (x64)
 
-There are two Windows UI paths in this repo:
-
-1. Rust `dupdup-ui-windows` (Win32 skeleton, quick native shell).
-2. `windows/DupdupWinUI` (WinUI 3 / Windows App SDK, modern UI direction).
-
-### Prereqs (Rust)
-
-- Rust toolchain (stable) for `x86_64-pc-windows-msvc`
-- Visual Studio 2022 Build Tools (MSVC) + Windows 10/11 SDK
-
-### Build/run Rust Win32 skeleton
-
-On Windows:
-
-```powershell
-cargo run -p dupdup-ui-windows --features winui
-```
-
 ### Prereqs (WinUI 3 app)
 
 - Windows 11 x64
@@ -114,4 +96,3 @@ swift build
 ```
 
 Linking the built Rust library into an actual SwiftUI app target is the next step (Xcode project setup), and will depend on whether you want `staticlib` or `cdylib` linkage and how you want to ship the Rust artifacts.
-

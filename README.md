@@ -10,8 +10,6 @@ See `BUILDING.md`.
 - `dupdup-core`: scanning, hashing, SQLite scan storage, and comparison primitives.
 - `dupdup-cli`: early entrypoint for scanning and inspecting scan DBs.
 - `dupdup-ui-gtk`: Linux GTK4 UI (stubbed behind a feature until GTK4 deps are wired).
-- `dupdup-ui-windows`: Windows native UI (Win32 skeleton behind feature).
-- `dupdup-ui-macos`: macOS native UI (stubbed).
 - `dupdup-ffi`: C-ABI wrapper for Swift/WinUI and other non-Rust hosts.
 
 ## Platform UI projects (non-Rust)

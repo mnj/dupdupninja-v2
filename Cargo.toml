@@ -4,8 +4,6 @@ members = [
   "crates/cli",
   "crates/ffi",
   "crates/ui-gtk",
-  "crates/ui-windows",
-  "crates/ui-macos",
 ]
 resolver = "2"
 
