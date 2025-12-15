@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Linux GTK deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libgtk-4-dev
+
+      - name: Build (workspace)
+        run: cargo build --workspace
+
+      - name: Build (GTK UI)
+        if: runner.os == 'Linux'
+        run: cargo build -p dupdupninja-ui-gtk --features gtk
+
+  winui:
+    name: WinUI 3 (Windows)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Build WinUI (Release)
+        working-directory: windows/DupdupNinjaWinUI/DupdupNinjaWinUI
+        run: dotnet build -c Release
+
+  swift:
+    name: Swift Package (macOS)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Swift package
+        working-directory: macos/DupdupNinjaCore
+        run: swift build -c release
+

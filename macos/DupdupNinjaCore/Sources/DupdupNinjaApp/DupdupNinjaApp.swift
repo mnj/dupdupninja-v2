@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 @main
 struct DupdupNinjaApp: App {
@@ -93,4 +94,3 @@ private func fileSystemType(for url: URL) -> String? {
         }
     }
 }
-
