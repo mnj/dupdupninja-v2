@@ -3,8 +3,12 @@ import PackageDescription
 
 let package = Package(
     name: "DupdupNinjaCore",
+    platforms: [
+        .macOS(.v13),
+    ],
     products: [
         .library(name: "DupdupNinjaCore", targets: ["DupdupNinjaCore"]),
+        .executable(name: "DupdupNinjaApp", targets: ["DupdupNinjaApp"]),
     ],
     targets: [
         .target(
@@ -16,6 +20,11 @@ let package = Package(
             name: "DupdupNinjaCore",
             dependencies: ["CDupdupNinja"],
             path: "Sources/DupdupNinjaCore"
+        ),
+        .executableTarget(
+            name: "DupdupNinjaApp",
+            dependencies: ["DupdupNinjaCore"],
+            path: "Sources/DupdupNinjaApp"
         ),
     ]
 )

@@ -1,6 +1,6 @@
 # DupdupNinjaCore (Swift Package stub)
 
-This is a stub Swift Package intended to wrap the shared Rust core via a C ABI.
+This is a Swift Package intended to wrap the shared Rust core via a C ABI, and includes a minimal SwiftUI app target for early UI iteration.
 
 ## Intended wiring
 1. Build the Rust FFI library from the repo root:
@@ -10,3 +10,11 @@ This is a stub Swift Package intended to wrap the shared Rust core via a C ABI.
 
 This package currently ships the header as a SwiftPM C target so Swift code can `import CDupdupNinja`.
 Linking is left to the host Xcode project (so the package can remain a lightweight stub).
+
+## SwiftUI app skeleton
+
+From `macos/DupdupNinjaCore` on macOS:
+
+```bash
+swift run DupdupNinjaApp
+```

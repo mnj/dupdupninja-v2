@@ -83,16 +83,23 @@ cargo build -p dupdupninja-ffi
 The exported header is:
 - `crates/ffi/include/dupdupninja.h`
 
-### Swift Package stub
+### Swift Package + SwiftUI app skeleton
 
 `macos/DupdupNinjaCore` is a SwiftPM package that:
 - Vendors the C header as target `CDupdupNinja`
 - Provides a tiny Swift wrapper (`DupdupNinjaCore.Engine`)
+- Includes a minimal SwiftUI app target (`DupdupNinjaApp`) with `Scan` menu items (Folder/Disk pickers)
 
 From `macos/DupdupNinjaCore`:
 
 ```bash
 swift build
+```
+
+Run the SwiftUI app (macOS only):
+
+```bash
+swift run DupdupNinjaApp
 ```
 
 Linking the built Rust library into an actual SwiftUI app target is the next step (Xcode project setup), and will depend on whether you want `staticlib` or `cdylib` linkage and how you want to ship the Rust artifacts.
