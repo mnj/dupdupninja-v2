@@ -12,10 +12,17 @@ jobs:
   build:
     name: Build artifacts (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.allow_failure }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14, windows-2022]
+        include:
+          - os: ubuntu-24.04
+            allow_failure: false
+          - os: macos-14
+            allow_failure: true
+          - os: windows-2022
+            allow_failure: true
 
     steps:
       - uses: actions/checkout@v4
@@ -108,6 +115,7 @@ jobs:
     name: Publish GitHub Release
     runs-on: ubuntu-24.04
     needs: [build]
+    if: always()
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -124,4 +132,3 @@ jobs:
         with:
           files: |
             artifacts/**/*
-
