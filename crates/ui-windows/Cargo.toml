@@ -12,9 +12,13 @@ path = "src/main.rs"
 dupdup-core = { path = "../core" }
 
 [features]
-winui = []
+winui = ["dep:windows"]
 
-# Real Windows UI deps will be added once the Windows project approach is chosen:
-# - `windows` crate for Win32/App SDK interop
-# - or a WinUI 3 bootstrap strategy for Rust
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", optional = true, features = [
+  "Win32_Foundation",
+  "Win32_System_LibraryLoader",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
+] }
 
