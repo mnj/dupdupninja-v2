@@ -15,12 +15,18 @@
             <muxc:MenuBarItem Title="_File">
                 <muxc:MenuFlyoutItem Text="E_xit" Click="Exit_Click" />
             </muxc:MenuBarItem>
+            <muxc:MenuBarItem Title="_Scan">
+                <muxc:MenuFlyoutItem Text="Scan _Folder..." Click="ScanFolder_Click" />
+                <muxc:MenuFlyoutItem Text="Scan _Disk..." Click="ScanDisk_Click" />
+            </muxc:MenuBarItem>
         </muxc:MenuBar>
 
         <TextBlock
             Grid.Row="1"
             Margin="24"
             FontSize="20"
+            TextWrapping="Wrap"
+            x:Name="StatusText"
             Text="dupdupninja (WinUI 3 skeleton)" />
     </Grid>
 </Window>
