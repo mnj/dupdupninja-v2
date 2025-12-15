@@ -1,0 +1,8 @@
+/target
+**/*.db
+**/*.db-journal
+**/*.sqlite
+**/*.sqlite3
+.DS_Store
+Thumbs.db
+

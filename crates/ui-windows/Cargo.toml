@@ -1,0 +1,20 @@
+[package]
+name = "dupdup-ui-windows"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "dupdup-ui-windows"
+path = "src/main.rs"
+
+[dependencies]
+dupdup-core = { path = "../core" }
+
+[features]
+winui = []
+
+# Real Windows UI deps will be added once the Windows project approach is chosen:
+# - `windows` crate for Win32/App SDK interop
+# - or a WinUI 3 bootstrap strategy for Rust
+

@@ -1,0 +1,18 @@
+[package]
+name = "dupdup-ui-macos"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "dupdup-ui-macos"
+path = "src/main.rs"
+
+[dependencies]
+dupdup-core = { path = "../core" }
+
+[features]
+cocoa = []
+
+# Real AppKit deps will be added once macOS UI approach is chosen (e.g. `objc2` + AppKit bindings).
+
