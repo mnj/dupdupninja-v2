@@ -151,6 +151,24 @@ fn main() {
         let toolbar = adw::ToolbarView::new();
         toolbar.add_top_bar(&header);
         toolbar.set_content(Some(&content));
+
+        let status_bar = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        status_bar.set_margin_top(6);
+        status_bar.set_margin_bottom(6);
+        status_bar.set_margin_start(12);
+        status_bar.set_margin_end(12);
+
+        let status_label = gtk::Label::new(Some("Status: Idle"));
+        status_label.set_xalign(0.0);
+        status_label.set_hexpand(true);
+        let progress = gtk::ProgressBar::new();
+        progress.set_fraction(0.0);
+        progress.set_show_text(true);
+        progress.set_text(Some("Idle"));
+        status_bar.append(&status_label);
+        status_bar.append(&progress);
+
+        toolbar.add_bottom_bar(&status_bar);
         window.set_content(Some(&toolbar));
 
         window.present();
@@ -200,9 +218,11 @@ where
             };
             let title = mount.name().to_string();
             let subtitle = format!("{}", path.display());
+            let detail = mount_detail("", &path.display().to_string());
             entries.push(MountEntry {
                 title,
                 subtitle,
+                detail,
                 icon_name: "drive-harddisk-symbolic",
                 path,
             });
@@ -227,8 +247,12 @@ where
         let subtitle = gtk::Label::new(Some(&entry.subtitle));
         subtitle.set_xalign(0.0);
         subtitle.add_css_class("dim-label");
+        let detail = gtk::Label::new(Some(&entry.detail));
+        detail.set_xalign(0.0);
+        detail.add_css_class("dim-label");
         text_box.append(&title);
         text_box.append(&subtitle);
+        text_box.append(&detail);
         row_box.append(&text_box);
 
         row.set_child(Some(&row_box));
@@ -300,6 +324,7 @@ where
 struct MountEntry {
     title: String,
     subtitle: String,
+    detail: String,
     icon_name: &'static str,
     path: std::path::PathBuf,
 }
@@ -315,7 +340,7 @@ fn mount_entries_from_proc() -> Vec<MountEntry> {
         Err(_) => return Vec::new(),
     };
 
-    let mut entries: BTreeMap<PathBuf, (String, String, &'static str)> = BTreeMap::new();
+    let mut entries: BTreeMap<PathBuf, (String, String, String, &'static str)> = BTreeMap::new();
     for line in contents.lines() {
         let mut parts = line.split(" - ");
         let left = match parts.next() {
@@ -345,17 +370,19 @@ fn mount_entries_from_proc() -> Vec<MountEntry> {
 
         let path = PathBuf::from(&mount_point);
         let subtitle = format!("{mount_point} [{fs_type}]");
+        let detail = mount_detail(source, &mount_point);
         let icon_name = icon_for_mount(source, &mount_point);
         entries
             .entry(path)
-            .or_insert((source.to_string(), subtitle, icon_name));
+            .or_insert((source.to_string(), subtitle, detail, icon_name));
     }
 
     entries
         .into_iter()
-        .map(|(path, (title, subtitle, icon_name))| MountEntry {
+        .map(|(path, (title, subtitle, detail, icon_name))| MountEntry {
             title,
             subtitle,
+            detail,
             icon_name,
             path,
         })
@@ -380,6 +407,86 @@ fn icon_for_mount(source: &str, mount_point: &str) -> &'static str {
     } else {
         "drive-harddisk-symbolic"
     }
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn mount_detail(source: &str, mount_point: &str) -> String {
+    let fs = filesystem_bytes(mount_point);
+    let model = device_model(source);
+    match (fs, model) {
+        (Some((total, free)), Some(model)) => format!(
+            "{} total • {} free • {}",
+            human_bytes(total),
+            human_bytes(free),
+            model
+        ),
+        (Some((total, free)), None) => format!(
+            "{} total • {} free",
+            human_bytes(total),
+            human_bytes(free)
+        ),
+        (None, Some(model)) => model,
+        (None, None) => "Details unavailable".to_string(),
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn filesystem_bytes(mount_point: &str) -> Option<(u64, u64)> {
+    use std::ffi::CString;
+    let c_path = CString::new(mount_point).ok()?;
+    unsafe {
+        let mut st: libc::statvfs = std::mem::zeroed();
+        if libc::statvfs(c_path.as_ptr(), &mut st) != 0 {
+            return None;
+        }
+        let total = st.f_blocks as u64 * st.f_frsize as u64;
+        let free = st.f_bavail as u64 * st.f_frsize as u64;
+        Some((total, free))
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn device_model(source: &str) -> Option<String> {
+    let dev_name = device_name_from_source(source)?;
+    let model_path = format!("/sys/class/block/{}/device/model", dev_name);
+    let model = std::fs::read_to_string(model_path).ok()?;
+    let model = model.trim();
+    if model.is_empty() {
+        None
+    } else {
+        Some(model.to_string())
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn device_name_from_source(source: &str) -> Option<String> {
+    if source.starts_with("/dev/") {
+        let path = std::path::Path::new(source);
+        if source.starts_with("/dev/mapper/") {
+            if let Ok(link) = std::fs::read_link(path) {
+                if let Some(name) = link.file_name().and_then(|v| v.to_str()) {
+                    return Some(name.to_string());
+                }
+            }
+        }
+        return path
+            .file_name()
+            .and_then(|v| v.to_str())
+            .map(|v| v.to_string());
+    }
+    None
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn human_bytes(value: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut size = value as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit + 1 < UNITS.len() {
+        size /= 1024.0;
+        unit += 1;
+    }
+    format!("{:.1} {}", size, UNITS[unit])
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]

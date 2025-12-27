@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 dupdupninja-core = { path = "../core" }
+libc = "0.2"
 
 [features]
 gtk = ["dep:gtk4", "dep:adw"]

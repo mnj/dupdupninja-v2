@@ -145,6 +145,7 @@ dependencies = [
  "dupdupninja-core",
  "gtk4",
  "libadwaita",
+ "libc",
 ]
 
 [[package]]
