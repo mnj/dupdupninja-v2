@@ -112,6 +112,7 @@ fn main() {
                     .modal(true)
                     .program_name("dupdupninja")
                     .version(env!("CARGO_PKG_VERSION"))
+                    .logo_icon_name("dupdupninja")
                     .comments("Cross-platform duplicate/near-duplicate media finder.")
                     .build();
                 dialog.present();
