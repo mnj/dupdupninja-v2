@@ -1,15 +1,28 @@
 import SwiftUI
 import AppKit
+import DupdupNinjaCore
 
 @main
 struct DupdupNinjaApp: App {
-    @State private var statusText: String = "dupdupninja (SwiftUI skeleton)"
+    @State private var statusText: String = "Status: Idle"
+    @State private var progressValue: Double = 0
+    @State private var progressIndeterminate: Bool = false
+    @State private var isScanning: Bool = false
+    @State private var cancelToken: CancelToken?
+    @State private var scanTask: Task<Void, Never>?
+
     @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
         WindowGroup {
-            ContentView(statusText: $statusText)
-                .frame(minWidth: 900, minHeight: 600)
+            ContentView(
+                statusText: $statusText,
+                progressValue: $progressValue,
+                progressIndeterminate: $progressIndeterminate,
+                isScanning: $isScanning,
+                onCancel: cancelScan
+            )
+            .frame(minWidth: 900, minHeight: 600)
         }
         .commands {
             CommandGroup(replacing: .appInfo) {
@@ -21,25 +34,15 @@ struct DupdupNinjaApp: App {
             CommandMenu("Scan") {
                 Button("Scan Folder…") {
                     if let url = pickDirectory(title: "Select a folder to scan", initial: nil) {
-                        statusText = "Folder scan path:\n\(url.path)"
-                        print("scan folder: \(url.path)")
+                        startScan(root: url)
                     }
                 }
 
                 Button("Scan Disk…") {
                     let volumes = URL(fileURLWithPath: "/Volumes", isDirectory: true)
                     if let url = pickDirectory(title: "Select a disk/mount to scan", initial: volumes) {
-                        let (scanRoot, meta) = resolveVolume(from: url)
-                        statusText =
-                            "Disk scan path:\n\(scanRoot.path)\n\n" +
-                            "Disk id (UUID): \(meta.uuid ?? "(unknown)")\n" +
-                            "Disk label: \(meta.label ?? "(unknown)")\n" +
-                            "FS type: \(meta.fsType ?? "(unknown)")"
-
-                        print("scan disk path: \(scanRoot.path)")
-                        print("disk id: \(meta.uuid ?? "nil")")
-                        print("disk label: \(meta.label ?? "nil")")
-                        print("disk fs_type: \(meta.fsType ?? "nil")")
+                        let (scanRoot, _) = resolveVolume(from: url)
+                        startScan(root: scanRoot)
                     }
                 }
             }
@@ -55,17 +58,130 @@ struct DupdupNinjaApp: App {
                 .frame(minWidth: 520, minHeight: 360)
         }
     }
+
+    private func startScan(root: URL) {
+        if isScanning {
+            statusText = "Status: Scan already running"
+            return
+        }
+
+        isScanning = true
+        progressIndeterminate = true
+        progressValue = 0
+        statusText = "Status: Preparing scan…"
+
+        let token = CancelToken()
+        cancelToken = token
+
+        scanTask?.cancel()
+        scanTask = Task {
+            do {
+                let totals = try await Task.detached {
+                    let engine = Engine()
+                    try engine.prescanFolder(rootPath: root.path, cancel: token) { progress in
+                        let folder = URL(fileURLWithPath: progress.currentPath).lastPathComponent
+                        let label = folder.isEmpty ? progress.currentPath : folder
+                        DispatchQueue.main.async {
+                            statusText = "Status: Preparing \(label) (\(progress.filesSeen) files)"
+                            progressIndeterminate = true
+                        }
+                    }
+                }.value
+
+                await MainActor.run {
+                    progressIndeterminate = false
+                    progressValue = 0
+                    statusText = "Status: Scanning…"
+                }
+
+                let dbPath = FileManager.default.temporaryDirectory
+                    .appendingPathComponent("dupdupninja-scan-\(Int(Date().timeIntervalSince1970)).sqlite3")
+
+                try await Task.detached {
+                    let engine = Engine()
+                    try engine.scanFolderToSqliteWithProgress(
+                        rootPath: root.path,
+                        dbPath: dbPath.path,
+                        cancel: token,
+                        totals: totals
+                    ) { progress in
+                        let folder = URL(fileURLWithPath: progress.currentPath).deletingLastPathComponent().lastPathComponent
+                        let label = folder.isEmpty ? progress.currentPath : folder
+                        let fraction = totals.totalFiles > 0
+                            ? Double(progress.filesSeen) / Double(totals.totalFiles)
+                            : 0
+                        DispatchQueue.main.async {
+                            statusText = "Status: Scanning \(label) (\(progress.filesSeen)/\(totals.totalFiles))"
+                            progressIndeterminate = false
+                            progressValue = min(max(fraction, 0), 1)
+                        }
+                    }
+                }.value
+
+                await MainActor.run {
+                    statusText = "Status: Scan complete"
+                    progressIndeterminate = false
+                    progressValue = 1
+                    isScanning = false
+                    cancelToken = nil
+                }
+            } catch {
+                let message = String(describing: error)
+                let final = message.contains("cancelled") ? "Status: Scan cancelled" : "Status: Scan error: \(message)"
+                await MainActor.run {
+                    statusText = final
+                    progressIndeterminate = false
+                    progressValue = 0
+                    isScanning = false
+                    cancelToken = nil
+                }
+            }
+        }
+    }
+
+    private func cancelScan() {
+        cancelToken?.cancel()
+        statusText = "Status: Cancelling…"
+    }
 }
 
 private struct ContentView: View {
     @Binding var statusText: String
+    @Binding var progressValue: Double
+    @Binding var progressIndeterminate: Bool
+    @Binding var isScanning: Bool
+    let onCancel: () -> Void
 
     var body: some View {
-        ScrollView {
-            Text(statusText)
-                .font(.system(size: 16, design: .monospaced))
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(24)
+        VStack(spacing: 0) {
+            ScrollView {
+                Text(statusText)
+                    .font(.system(size: 16, design: .monospaced))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(24)
+            }
+
+            Divider()
+
+            HStack(spacing: 12) {
+                Text(statusText)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                if progressIndeterminate {
+                    ProgressView()
+                        .frame(width: 200)
+                } else {
+                    ProgressView(value: progressValue)
+                        .frame(width: 200)
+                }
+
+                Button("Cancel") {
+                    onCancel()
+                }
+                .disabled(!isScanning)
+            }
+            .padding(12)
         }
     }
 }
