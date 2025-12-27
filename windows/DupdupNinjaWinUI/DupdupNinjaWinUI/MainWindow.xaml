@@ -43,7 +43,7 @@
                 FontWeight="SemiBold" />
         </Grid>
 
-        <Grid Grid.Row="2" Background="{ThemeResource MicaBackgroundFillColorDefault}">
+        <Grid Grid.Row="2" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="240" />

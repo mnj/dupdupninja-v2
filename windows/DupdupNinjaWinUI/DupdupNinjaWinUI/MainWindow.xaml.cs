@@ -1,7 +1,9 @@
 using System;
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Windows.Storage;
@@ -276,7 +278,7 @@ namespace DupdupNinjaWinUI
             });
         }
 
-        private void EnqueueUi(Action action)
+        private void EnqueueUi(DispatcherQueueHandler action)
         {
             _ = DispatcherQueue.TryEnqueue(action);
         }
@@ -321,6 +323,74 @@ namespace DupdupNinjaWinUI
 
         private static class NativeMethods
         {
+            private const string NativeLibraryName = "dupdupninja_ffi";
+
+            static NativeMethods()
+            {
+                NativeLibrary.SetDllImportResolver(typeof(NativeMethods).Assembly, ResolveNativeLibrary);
+            }
+
+            private static IntPtr ResolveNativeLibrary(string libraryName, Assembly assembly, DllImportSearchPath? searchPath)
+            {
+                if (!string.Equals(libraryName, NativeLibraryName, StringComparison.Ordinal))
+                {
+                    return IntPtr.Zero;
+                }
+
+                var runtimeFolder = RuntimeInformation.ProcessArchitecture switch
+                {
+                    Architecture.X64 => "win-x64",
+                    Architecture.X86 => "win-x86",
+                    Architecture.Arm64 => "win-arm64",
+                    _ => null
+                };
+
+                if (runtimeFolder is null)
+                {
+                    return IntPtr.Zero;
+                }
+
+                string?[] candidatePaths =
+                {
+                    Path.Combine(AppContext.BaseDirectory, "runtimes", runtimeFolder, "native", $"{NativeLibraryName}.dll"),
+                    Path.Combine(AppContext.BaseDirectory, $"{NativeLibraryName}.dll"),
+                    FindRuntimeLibraryInParents(runtimeFolder)
+                };
+
+                foreach (var candidate in candidatePaths)
+                {
+                    if (candidate is null)
+                    {
+                        continue;
+                    }
+
+                    if (File.Exists(candidate))
+                    {
+                        return NativeLibrary.Load(candidate);
+                    }
+                }
+
+                return IntPtr.Zero;
+            }
+
+            private static string? FindRuntimeLibraryInParents(string runtimeFolder)
+            {
+                var currentDirectory = Directory.GetParent(AppContext.BaseDirectory);
+
+                while (currentDirectory is not null)
+                {
+                    var candidate = Path.Combine(currentDirectory.FullName, "runtimes", runtimeFolder, "native", $"{NativeLibraryName}.dll");
+                    if (File.Exists(candidate))
+                    {
+                        return candidate;
+                    }
+
+                    currentDirectory = currentDirectory.Parent;
+                }
+
+                return null;
+            }
+
             internal enum DupdupStatus
             {
                 Ok = 0,
@@ -363,25 +433,25 @@ namespace DupdupNinjaWinUI
             [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
             internal delegate void PrescanCallback(IntPtr progress, IntPtr userData);
 
-            [DllImport("dupdupninja_ffi", CallingConvention = CallingConvention.Cdecl)]
+            [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl)]
             internal static extern IntPtr dupdupninja_engine_new();
 
-            [DllImport("dupdupninja_ffi", CallingConvention = CallingConvention.Cdecl)]
+            [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl)]
             internal static extern void dupdupninja_engine_free(IntPtr engine);
 
-            [DllImport("dupdupninja_ffi", CallingConvention = CallingConvention.Cdecl)]
+            [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl)]
             internal static extern IntPtr dupdupninja_cancel_token_new();
 
-            [DllImport("dupdupninja_ffi", CallingConvention = CallingConvention.Cdecl)]
+            [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl)]
             internal static extern void dupdupninja_cancel_token_free(IntPtr token);
 
-            [DllImport("dupdupninja_ffi", CallingConvention = CallingConvention.Cdecl)]
+            [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl)]
             internal static extern void dupdupninja_cancel_token_cancel(IntPtr token);
 
-            [DllImport("dupdupninja_ffi", CallingConvention = CallingConvention.Cdecl)]
+            [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl)]
             internal static extern IntPtr dupdupninja_last_error_message();
 
-            [DllImport("dupdupninja_ffi", CallingConvention = CallingConvention.Cdecl)]
+            [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl)]
             internal static extern DupdupStatus dupdupninja_prescan_folder(
                 [MarshalAs(UnmanagedType.LPUTF8Str)] string rootPath,
                 IntPtr cancelToken,
@@ -389,7 +459,7 @@ namespace DupdupNinjaWinUI
                 IntPtr userData,
                 ref PrescanTotals totals);
 
-            [DllImport("dupdupninja_ffi", CallingConvention = CallingConvention.Cdecl)]
+            [DllImport(NativeLibraryName, CallingConvention = CallingConvention.Cdecl)]
             internal static extern DupdupStatus dupdupninja_scan_folder_to_sqlite_with_progress_and_totals(
                 IntPtr engine,
                 [MarshalAs(UnmanagedType.LPUTF8Str)] string rootPath,

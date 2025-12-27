@@ -7,3 +7,8 @@
 Thumbs.db
 .vs/
 **/*.csproj.user
+windows/DupdupNinjaWinUI/DupdupNinjaWinUI/bin/
+windows/DupdupNinjaWinUI/DupdupNinjaWinUI/obj/
+windows/DupdupNinjaWinUI/DupdupNinjaWinUI/AppPackages/
+windows/DupdupNinjaWinUI/DupdupNinjaWinUI/BundleArtifacts/
+windows/DupdupNinjaWinUI/DupdupNinjaWinUI/runtimes/
