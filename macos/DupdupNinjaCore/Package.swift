@@ -24,7 +24,10 @@ let package = Package(
         .executableTarget(
             name: "DupdupNinjaApp",
             dependencies: ["DupdupNinjaCore"],
-            path: "Sources/DupdupNinjaApp"
+            path: "Sources/DupdupNinjaApp",
+            resources: [
+                .process("Resources")
+            ]
         ),
     ]
 )

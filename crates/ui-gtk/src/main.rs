@@ -126,9 +126,15 @@ fn main() {
     app_menu.append(Some("Exit"), Some("app.quit"));
 
     app.connect_activate(move |app| {
+        if let Some(display) = gtk::gdk::Display::default() {
+            let theme = gtk::IconTheme::for_display(&display);
+            theme.add_search_path("icons/linux");
+        }
+
         let window = adw::ApplicationWindow::new(app);
         window.set_title(Some("dupdupninja"));
         window.set_default_size(1100, 720);
+        window.set_icon_name(Some("dupdupninja"));
 
         let header = adw::HeaderBar::new();
         let new_scan_menu = gio::Menu::new();

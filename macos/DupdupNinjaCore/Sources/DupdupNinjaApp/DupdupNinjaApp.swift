@@ -13,6 +13,13 @@ struct DupdupNinjaApp: App {
 
     @Environment(\.openWindow) private var openWindow
 
+    init() {
+        if let url = Bundle.main.url(forResource: "dupdupninja", withExtension: "icns"),
+           let image = NSImage(contentsOf: url) {
+            NSApp.applicationIconImage = image
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView(
