@@ -39,6 +39,13 @@ should check `DUPDUPNINJA_FFI_ABI_MAJOR` (or `dupdupninja_ffi_abi_major()`)
 at load time and refuse to run on mismatched major versions. Minor/patch
 changes are additive/backwards-compatible within the same ABI major.
 
+The cdylib is versioned by ABI major on Unix platforms:
+- Linux: SONAME `libdupdupninja_ffi.so.<ABI_MAJOR>`
+- macOS: install name `libdupdupninja_ffi.<ABI_MAJOR>.dylib`
+
+On Windows, the DLL remains `dupdupninja_ffi.dll`; use the ABI query
+function and/or embed the ABI major in your loader logic.
+
 ## Linux (Ubuntu 24.04, GTK4)
 
 ### Prereqs
