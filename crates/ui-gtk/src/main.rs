@@ -198,20 +198,40 @@ where
                 Some(path) => path,
                 None => continue,
             };
-            let label = format!("{}  ({})", mount.name(), path.display());
-            entries.push(MountEntry { label, path });
+            let title = mount.name().to_string();
+            let subtitle = format!("{}", path.display());
+            entries.push(MountEntry {
+                title,
+                subtitle,
+                icon_name: "drive-harddisk-symbolic",
+                path,
+            });
         }
     }
 
     for entry in entries {
         let row = gtk::ListBoxRow::new();
-        let text = gtk::Label::new(Some(&entry.label));
-        text.set_xalign(0.0);
-        text.set_margin_top(6);
-        text.set_margin_bottom(6);
-        text.set_margin_start(10);
-        text.set_margin_end(10);
-        row.set_child(Some(&text));
+        let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        row_box.set_margin_top(6);
+        row_box.set_margin_bottom(6);
+        row_box.set_margin_start(10);
+        row_box.set_margin_end(10);
+
+        let icon = gtk::Image::from_icon_name(entry.icon_name);
+        icon.set_pixel_size(20);
+        row_box.append(&icon);
+
+        let text_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        let title = gtk::Label::new(Some(&entry.title));
+        title.set_xalign(0.0);
+        let subtitle = gtk::Label::new(Some(&entry.subtitle));
+        subtitle.set_xalign(0.0);
+        subtitle.add_css_class("dim-label");
+        text_box.append(&title);
+        text_box.append(&subtitle);
+        row_box.append(&text_box);
+
+        row.set_child(Some(&row_box));
         row.set_activatable(true);
         row.set_selectable(true);
         unsafe {
@@ -278,7 +298,9 @@ where
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]
 struct MountEntry {
-    label: String,
+    title: String,
+    subtitle: String,
+    icon_name: &'static str,
     path: std::path::PathBuf,
 }
 
@@ -293,7 +315,7 @@ fn mount_entries_from_proc() -> Vec<MountEntry> {
         Err(_) => return Vec::new(),
     };
 
-    let mut entries: BTreeMap<PathBuf, String> = BTreeMap::new();
+    let mut entries: BTreeMap<PathBuf, (String, String, &'static str)> = BTreeMap::new();
     for line in contents.lines() {
         let mut parts = line.split(" - ");
         let left = match parts.next() {
@@ -322,13 +344,21 @@ fn mount_entries_from_proc() -> Vec<MountEntry> {
         }
 
         let path = PathBuf::from(&mount_point);
-        let label = format!("{source}  ({mount_point}) [{fs_type}]");
-        entries.entry(path).or_insert(label);
+        let subtitle = format!("{mount_point} [{fs_type}]");
+        let icon_name = icon_for_mount(source, &mount_point);
+        entries
+            .entry(path)
+            .or_insert((source.to_string(), subtitle, icon_name));
     }
 
     entries
         .into_iter()
-        .map(|(path, label)| MountEntry { path, label })
+        .map(|(path, (title, subtitle, icon_name))| MountEntry {
+            title,
+            subtitle,
+            icon_name,
+            path,
+        })
         .collect()
 }
 
@@ -339,6 +369,17 @@ fn should_include_mount(source: &str, mount_point: &str) -> bool {
         || mount_point.starts_with("/run/media/")
         || mount_point.starts_with("/media/")
         || mount_point.starts_with("/mnt/")
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn icon_for_mount(source: &str, mount_point: &str) -> &'static str {
+    if mount_point.starts_with("/run/media/") || mount_point.starts_with("/media/") {
+        "media-removable-symbolic"
+    } else if mount_point == "/" || source.starts_with("/dev/") {
+        "drive-harddisk-symbolic"
+    } else {
+        "drive-harddisk-symbolic"
+    }
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]
