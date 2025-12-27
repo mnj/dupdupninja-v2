@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -14,9 +15,17 @@ namespace DupdupNinjaWinUI
     /// </summary>
     public sealed partial class MainWindow : Window
     {
+        private IntPtr _engine = IntPtr.Zero;
+        private IntPtr _cancelToken = IntPtr.Zero;
+        private bool _isScanning;
+        private NativeMethods.ProgressCallback? _progressCallback;
+        private NativeMethods.PrescanCallback? _prescanCallback;
+
         public MainWindow()
         {
             InitializeComponent();
+            _engine = NativeMethods.dupdupninja_engine_new();
+            Closed += OnClosed;
         }
 
         private void OpenSettings_Click(object sender, RoutedEventArgs e)
@@ -31,12 +40,20 @@ namespace DupdupNinjaWinUI
 
         private async void ScanFolder_Click(object sender, RoutedEventArgs e)
         {
-            _ = await PickFolderAsync(PickerLocationId.DocumentsLibrary, "Scan Folder");
+            var folder = await PickFolderAsync(PickerLocationId.DocumentsLibrary, "Scan Folder");
+            if (folder is not null)
+            {
+                await StartScanAsync(folder.Path);
+            }
         }
 
         private async void ScanDisk_Click(object sender, RoutedEventArgs e)
         {
-            _ = await PickDriveAsync();
+            var folder = await PickDriveAsync();
+            if (folder is not null)
+            {
+                await StartScanAsync(folder.Path);
+            }
         }
 
         private async Task<StorageFolder?> PickFolderAsync(PickerLocationId startLocation, string commitText)
@@ -113,6 +130,275 @@ namespace DupdupNinjaWinUI
             return path.EndsWith(Path.DirectorySeparatorChar)
                 ? path
                 : path + Path.DirectorySeparatorChar;
+        }
+
+        private async Task StartScanAsync(string rootPath)
+        {
+            if (_isScanning)
+            {
+                await ShowInfoAsync("Scan in progress", "Please wait for the current scan to finish or cancel it.");
+                return;
+            }
+
+            if (_engine == IntPtr.Zero)
+            {
+                await ShowInfoAsync("Scan error", "Engine is not initialized.");
+                return;
+            }
+
+            _isScanning = true;
+            StatusText.Text = "Status: Preparing scan...";
+            ScanProgress.IsIndeterminate = true;
+            ScanProgress.Value = 0;
+            CancelButton.IsEnabled = true;
+
+            if (_cancelToken != IntPtr.Zero)
+            {
+                NativeMethods.dupdupninja_cancel_token_free(_cancelToken);
+                _cancelToken = IntPtr.Zero;
+            }
+            _cancelToken = NativeMethods.dupdupninja_cancel_token_new();
+
+            _prescanCallback ??= OnPrescanProgress;
+            _progressCallback ??= OnScanProgress;
+
+            var dbPath = Path.Combine(Path.GetTempPath(), $"dupdupninja-scan-{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}.sqlite3");
+
+            await Task.Run(() =>
+            {
+                var totals = new NativeMethods.PrescanTotals();
+                var prescanStatus = NativeMethods.dupdupninja_prescan_folder(
+                    rootPath,
+                    _cancelToken,
+                    _prescanCallback,
+                    IntPtr.Zero,
+                    ref totals
+                );
+
+                if (prescanStatus != NativeMethods.DupdupStatus.Ok)
+                {
+                    var error = GetLastError() ?? "Prescan failed.";
+                    EnqueueUi(() =>
+                    {
+                        StatusText.Text = $"Status: {error}";
+                        ScanProgress.IsIndeterminate = false;
+                        ScanProgress.Value = 0;
+                        CancelButton.IsEnabled = false;
+                    });
+                    _isScanning = false;
+                    return;
+                }
+
+                var scanStatus = NativeMethods.dupdupninja_scan_folder_to_sqlite_with_progress_and_totals(
+                    _engine,
+                    rootPath,
+                    dbPath,
+                    _cancelToken,
+                    totals.TotalFiles,
+                    totals.TotalBytes,
+                    _progressCallback,
+                    IntPtr.Zero
+                );
+
+                if (scanStatus != NativeMethods.DupdupStatus.Ok)
+                {
+                    var error = GetLastError() ?? "Scan failed.";
+                    EnqueueUi(() =>
+                    {
+                        StatusText.Text = $"Status: {error}";
+                        ScanProgress.IsIndeterminate = false;
+                        ScanProgress.Value = 0;
+                        CancelButton.IsEnabled = false;
+                    });
+                }
+                else
+                {
+                    EnqueueUi(() =>
+                    {
+                        StatusText.Text = "Status: Scan complete";
+                        ScanProgress.IsIndeterminate = false;
+                        ScanProgress.Value = 1;
+                        CancelButton.IsEnabled = false;
+                    });
+                }
+
+                _isScanning = false;
+            });
+        }
+
+        private void CancelScan_Click(object sender, RoutedEventArgs e)
+        {
+            if (_cancelToken != IntPtr.Zero)
+            {
+                NativeMethods.dupdupninja_cancel_token_cancel(_cancelToken);
+                StatusText.Text = "Status: Cancelling...";
+                CancelButton.IsEnabled = false;
+            }
+        }
+
+        private void OnPrescanProgress(IntPtr progressPtr, IntPtr userData)
+        {
+            if (progressPtr == IntPtr.Zero)
+            {
+                return;
+            }
+
+            var progress = Marshal.PtrToStructure<NativeMethods.PrescanProgress>(progressPtr);
+            var path = Marshal.PtrToStringUTF8(progress.CurrentPath) ?? string.Empty;
+            var folder = Path.GetFileName(path);
+            var label = string.IsNullOrEmpty(folder) ? path : folder;
+
+            EnqueueUi(() =>
+            {
+                StatusText.Text = $"Status: Preparing {label} ({progress.FilesSeen} files)";
+                ScanProgress.IsIndeterminate = true;
+            });
+        }
+
+        private void OnScanProgress(IntPtr progressPtr, IntPtr userData)
+        {
+            if (progressPtr == IntPtr.Zero)
+            {
+                return;
+            }
+
+            var progress = Marshal.PtrToStructure<NativeMethods.ScanProgress>(progressPtr);
+            var path = Marshal.PtrToStringUTF8(progress.CurrentPath) ?? string.Empty;
+            var folder = Path.GetFileName(Path.GetDirectoryName(path) ?? path);
+            var label = string.IsNullOrEmpty(folder) ? path : folder;
+
+            var fraction = progress.TotalFiles > 0 ? (double)progress.FilesSeen / progress.TotalFiles : 0;
+            EnqueueUi(() =>
+            {
+                StatusText.Text = $"Status: Scanning {label} ({progress.FilesSeen}/{progress.TotalFiles})";
+                ScanProgress.IsIndeterminate = false;
+                ScanProgress.Value = Math.Clamp(fraction, 0, 1);
+            });
+        }
+
+        private void EnqueueUi(Action action)
+        {
+            _ = DispatcherQueue.TryEnqueue(action);
+        }
+
+        private static string? GetLastError()
+        {
+            var ptr = NativeMethods.dupdupninja_last_error_message();
+            return ptr == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(ptr);
+        }
+
+        private async Task ShowInfoAsync(string title, string message)
+        {
+            var dialog = new ContentDialog
+            {
+                Title = title,
+                Content = message,
+                CloseButtonText = "OK"
+            };
+
+            if (Content is FrameworkElement root)
+            {
+                dialog.XamlRoot = root.XamlRoot;
+            }
+
+            await dialog.ShowAsync();
+        }
+
+        private void OnClosed(object sender, WindowEventArgs args)
+        {
+            if (_cancelToken != IntPtr.Zero)
+            {
+                NativeMethods.dupdupninja_cancel_token_free(_cancelToken);
+                _cancelToken = IntPtr.Zero;
+            }
+
+            if (_engine != IntPtr.Zero)
+            {
+                NativeMethods.dupdupninja_engine_free(_engine);
+                _engine = IntPtr.Zero;
+            }
+        }
+
+        private static class NativeMethods
+        {
+            internal enum DupdupStatus
+            {
+                Ok = 0,
+                Error = 1,
+                InvalidArgument = 2,
+                NullPointer = 3
+            }
+
+            [StructLayout(LayoutKind.Sequential)]
+            internal struct ScanProgress
+            {
+                public ulong FilesSeen;
+                public ulong FilesHashed;
+                public ulong FilesSkipped;
+                public ulong BytesSeen;
+                public ulong TotalFiles;
+                public ulong TotalBytes;
+                public IntPtr CurrentPath;
+            }
+
+            [StructLayout(LayoutKind.Sequential)]
+            internal struct PrescanTotals
+            {
+                public ulong TotalFiles;
+                public ulong TotalBytes;
+            }
+
+            [StructLayout(LayoutKind.Sequential)]
+            internal struct PrescanProgress
+            {
+                public ulong FilesSeen;
+                public ulong BytesSeen;
+                public ulong DirsSeen;
+                public IntPtr CurrentPath;
+            }
+
+            [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+            internal delegate void ProgressCallback(IntPtr progress, IntPtr userData);
+
+            [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+            internal delegate void PrescanCallback(IntPtr progress, IntPtr userData);
+
+            [DllImport("dupdupninja_ffi", CallingConvention = CallingConvention.Cdecl)]
+            internal static extern IntPtr dupdupninja_engine_new();
+
+            [DllImport("dupdupninja_ffi", CallingConvention = CallingConvention.Cdecl)]
+            internal static extern void dupdupninja_engine_free(IntPtr engine);
+
+            [DllImport("dupdupninja_ffi", CallingConvention = CallingConvention.Cdecl)]
+            internal static extern IntPtr dupdupninja_cancel_token_new();
+
+            [DllImport("dupdupninja_ffi", CallingConvention = CallingConvention.Cdecl)]
+            internal static extern void dupdupninja_cancel_token_free(IntPtr token);
+
+            [DllImport("dupdupninja_ffi", CallingConvention = CallingConvention.Cdecl)]
+            internal static extern void dupdupninja_cancel_token_cancel(IntPtr token);
+
+            [DllImport("dupdupninja_ffi", CallingConvention = CallingConvention.Cdecl)]
+            internal static extern IntPtr dupdupninja_last_error_message();
+
+            [DllImport("dupdupninja_ffi", CallingConvention = CallingConvention.Cdecl)]
+            internal static extern DupdupStatus dupdupninja_prescan_folder(
+                [MarshalAs(UnmanagedType.LPUTF8Str)] string rootPath,
+                IntPtr cancelToken,
+                PrescanCallback progressCb,
+                IntPtr userData,
+                ref PrescanTotals totals);
+
+            [DllImport("dupdupninja_ffi", CallingConvention = CallingConvention.Cdecl)]
+            internal static extern DupdupStatus dupdupninja_scan_folder_to_sqlite_with_progress_and_totals(
+                IntPtr engine,
+                [MarshalAs(UnmanagedType.LPUTF8Str)] string rootPath,
+                [MarshalAs(UnmanagedType.LPUTF8Str)] string dbPath,
+                IntPtr cancelToken,
+                ulong totalFiles,
+                ulong totalBytes,
+                ProgressCallback progressCb,
+                IntPtr userData);
         }
     }
 }
