@@ -129,23 +129,6 @@ fn main() {
     ));
     app.add_action(&about);
 
-    let menubar = gio::Menu::new();
-    let file_menu = gio::Menu::new();
-    file_menu.append(Some("Settings…"), Some("app.settings"));
-    file_menu.append(Some("Exit"), Some("app.quit"));
-    menubar.append_submenu(Some("File"), &file_menu);
-
-    let scan_menu = gio::Menu::new();
-    scan_menu.append(Some("Folder…"), Some("app.scan_folder"));
-    scan_menu.append(Some("Disk…"), Some("app.scan_disk"));
-    menubar.append_submenu(Some("Scan"), &scan_menu);
-
-    let help_menu = gio::Menu::new();
-    help_menu.append(Some("About"), Some("app.about"));
-    menubar.append_submenu(Some("Help"), &help_menu);
-
-    app.set_menubar(Some(&menubar));
-
     let app_menu = gio::Menu::new();
     app_menu.append(Some("Settings…"), Some("app.settings"));
     app_menu.append(Some("About"), Some("app.about"));
@@ -162,7 +145,12 @@ fn main() {
         let popover = gtk::PopoverMenu::from_model(Some(&app_menu));
         menu_button.set_popover(Some(&popover));
         header.pack_end(&menu_button);
-        window.set_titlebar(Some(&header));
+
+        let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let toolbar = adw::ToolbarView::new();
+        toolbar.add_top_bar(&header);
+        toolbar.set_content(Some(&content));
+        window.set_content(Some(&toolbar));
 
         window.present();
         window.maximize();
