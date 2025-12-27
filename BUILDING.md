@@ -86,19 +86,17 @@ The GTK UI opts into GTK 4.16 APIs (`v4_16`), which aligns with GNOME 48 as ship
 
 ## Windows 11 (x64)
 
-### Prereqs (WinUI 3 app, C++/WinRT)
+### Prereqs (WinUI 3 app, .NET)
 
 - Windows 11 x64
-- Visual Studio 2022 with:
-  - Desktop development with C++
-  - Windows App SDK / WinUI 3 tooling
-  - C++/WinRT support
+- Visual Studio 2022 with Windows App SDK / WinUI 3 tooling
+- .NET SDK (project targets `net8.0-windows10.0.19041.0`)
 - Windows 10/11 SDK (10.0.19041+)
 - Windows App SDK runtime installed (unpackaged apps rely on it being present)
 
 ### Build/run WinUI 3 app
 
-From `windows/DupdupNinjaWinUI`, open `DupdupNinjaWinUI.sln` in Visual Studio,
+From `windows/DupdupNinjaWinUI`, open `DupdupNinjaWinUI.slnx` in Visual Studio,
 restore NuGet packages, then build and run the `DupdupNinjaWinUI` project.
 
 ## macOS (SwiftUI + Rust core via C ABI)
