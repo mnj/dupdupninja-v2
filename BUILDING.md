@@ -31,6 +31,14 @@ cargo fmt
 cargo clippy
 ```
 
+### FFI versioning (C ABI)
+
+The C ABI (`dupdupninja-ffi`) exposes explicit ABI version constants in
+`crates/ffi/include/dupdupninja.h` and runtime query functions. Consumers
+should check `DUPDUPNINJA_FFI_ABI_MAJOR` (or `dupdupninja_ffi_abi_major()`)
+at load time and refuse to run on mismatched major versions. Minor/patch
+changes are additive/backwards-compatible within the same ABI major.
+
 ## Linux (Ubuntu 24.04, GTK4)
 
 ### Prereqs

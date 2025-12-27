@@ -11,12 +11,30 @@ extern "C" {
 
 typedef struct DupdupEngine DupdupEngine;
 
+enum {
+  DUPDUPNINJA_FFI_ABI_MAJOR = 1,
+  DUPDUPNINJA_FFI_ABI_MINOR = 0,
+  DUPDUPNINJA_FFI_ABI_PATCH = 0,
+};
+
+typedef struct DupdupNinjaVersion {
+  uint32_t major;
+  uint32_t minor;
+  uint32_t patch;
+} DupdupNinjaVersion;
+
 typedef enum DupdupStatus {
   DUPDUP_STATUS_OK = 0,
   DUPDUP_STATUS_ERROR = 1,
   DUPDUP_STATUS_INVALID_ARGUMENT = 2,
   DUPDUP_STATUS_NULL_POINTER = 3,
 } DupdupStatus;
+
+// Returns the FFI library version (semantic version).
+DupdupNinjaVersion dupdupninja_ffi_version(void);
+
+// Returns the ABI major version used for compatibility checks.
+uint32_t dupdupninja_ffi_abi_major(void);
 
 DupdupEngine* dupdupninja_engine_new(void);
 void dupdupninja_engine_free(DupdupEngine* engine);

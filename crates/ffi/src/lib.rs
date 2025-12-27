@@ -34,6 +34,18 @@ pub struct DupdupEngine {
 
 struct Engine;
 
+const FFI_ABI_MAJOR: u32 = 1;
+const FFI_ABI_MINOR: u32 = 0;
+const FFI_ABI_PATCH: u32 = 0;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DupdupVersion {
+    pub major: u32,
+    pub minor: u32,
+    pub patch: u32,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DupdupStatus {
@@ -48,6 +60,20 @@ pub extern "C" fn dupdupninja_engine_new() -> *mut DupdupEngine {
     ok_last_error();
     let engine = Box::new(Engine);
     Box::into_raw(engine) as *mut DupdupEngine
+}
+
+#[no_mangle]
+pub extern "C" fn dupdupninja_ffi_version() -> DupdupVersion {
+    DupdupVersion {
+        major: FFI_ABI_MAJOR,
+        minor: FFI_ABI_MINOR,
+        patch: FFI_ABI_PATCH,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn dupdupninja_ffi_abi_major() -> u32 {
+    FFI_ABI_MAJOR
 }
 
 #[no_mangle]
