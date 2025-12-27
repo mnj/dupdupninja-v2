@@ -52,8 +52,8 @@ fn main() {
         app,
         move |_, _| {
             if let Some(window) = app.active_window() {
-                glib::MainContext::ref_thread_default().spawn_local(async move {
-                    if let Some(path) = select_mount_path(&window).await {
+                select_mount_path(&window, move |path| {
+                    if let Some(path) = path {
                         println!("scan disk path: {}", path.to_string_lossy());
                         match dupdupninja_core::drive::probe_for_path(&path) {
                             Ok(meta) => {
@@ -161,32 +161,33 @@ fn main() {
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]
-async fn select_mount_path(window: &gtk4::Window) -> Option<std::path::PathBuf> {
+fn select_mount_path<F>(window: &gtk4::Window, on_selected: F)
+where
+    F: Fn(Option<std::path::PathBuf>) + 'static,
+{
     use gtk4 as gtk;
     use gtk::gio;
     use gtk::prelude::*;
+    use adw::prelude::*;
 
-    let dialog = gtk::Dialog::builder()
-        .title("Select a disk/mount to scan")
-        .transient_for(window)
-        .modal(true)
-        .default_width(520)
-        .default_height(360)
-        .build();
-    dialog.add_button("Cancel", gtk::ResponseType::Cancel);
-    dialog.add_button("Select", gtk::ResponseType::Accept);
-
-    let content = dialog.content_area();
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
     content.set_margin_top(12);
     content.set_margin_bottom(12);
     content.set_margin_start(12);
     content.set_margin_end(12);
-    content.set_spacing(8);
+
+    let title = gtk::Label::new(Some("Select a disk/mount to scan"));
+    title.add_css_class("title-4");
+    title.set_xalign(0.0);
+    content.append(&title);
 
     let list = gtk::ListBox::new();
     list.set_selection_mode(gtk::SelectionMode::Single);
     list.add_css_class("boxed-list");
-    content.append(&list);
+    let scroller = gtk::ScrolledWindow::new();
+    scroller.set_child(Some(&list));
+    scroller.set_vexpand(true);
+    content.append(&scroller);
 
     let mut entries = mount_entries_from_proc();
     if entries.is_empty() {
@@ -219,18 +220,60 @@ async fn select_mount_path(window: &gtk4::Window) -> Option<std::path::PathBuf> 
         list.append(&row);
     }
 
-    let response = dialog.run_future().await;
-    let selection = if response == gtk::ResponseType::Accept {
-        list.selected_row().and_then(|row| unsafe {
+    let button_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    button_row.set_halign(gtk::Align::End);
+    let cancel_button = gtk::Button::with_label("Cancel");
+    let select_button = gtk::Button::with_label("Select");
+    select_button.add_css_class("suggested-action");
+    select_button.set_sensitive(false);
+    button_row.append(&cancel_button);
+    button_row.append(&select_button);
+    content.append(&button_row);
+
+    let dialog = adw::Dialog::builder()
+        .content_width(520)
+        .content_height(360)
+        .child(&content)
+        .build();
+
+    let callback = std::rc::Rc::new(std::cell::RefCell::new(Some(Box::new(on_selected))));
+
+    let callback_for_select = callback.clone();
+    let list_for_select = list.clone();
+    let dialog_for_select = dialog.clone();
+    select_button.connect_clicked(move |_| {
+        let selection = list_for_select.selected_row().and_then(|row| unsafe {
             row.data::<std::path::PathBuf>("mount-path")
                 .map(|p| p.as_ref().clone())
-        })
-    } else {
-        None
-    };
+        });
+        if let Some(callback) = callback_for_select.borrow_mut().take() {
+            callback(selection);
+        }
+        let _ = dialog_for_select.close();
+    });
 
-    dialog.close();
-    selection
+    let callback_for_cancel = callback.clone();
+    let dialog_for_cancel = dialog.clone();
+    cancel_button.connect_clicked(move |_| {
+        if let Some(callback) = callback_for_cancel.borrow_mut().take() {
+            callback(None);
+        }
+        let _ = dialog_for_cancel.close();
+    });
+
+    let select_button_for_row = select_button.clone();
+    list.connect_row_selected(move |_, row| {
+        select_button_for_row.set_sensitive(row.is_some());
+    });
+
+    let callback_for_closed = callback.clone();
+    dialog.connect_closed(move |_| {
+        if let Some(callback) = callback_for_closed.borrow_mut().take() {
+            callback(None);
+        }
+    });
+
+    dialog.present(Some(window));
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]
