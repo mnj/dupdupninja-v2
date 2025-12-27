@@ -7,7 +7,10 @@ use std::path::PathBuf;
 
 use dupdupninja_core::db::SqliteScanStore;
 use dupdupninja_core::models::ScanRootKind;
-use dupdupninja_core::scan::{scan_to_sqlite, scan_to_sqlite_with_progress, ScanCancelToken, ScanConfig};
+use dupdupninja_core::scan::{
+    prescan, scan_to_sqlite, scan_to_sqlite_with_progress, scan_to_sqlite_with_progress_and_totals,
+    PrescanProgress, ScanCancelToken, ScanConfig, ScanTotals,
+};
 
 thread_local! {
     static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
@@ -45,13 +48,32 @@ pub struct DupdupProgress {
     pub files_hashed: u64,
     pub files_skipped: u64,
     pub bytes_seen: u64,
+    pub total_files: u64,
+    pub total_bytes: u64,
     pub current_path: *const c_char,
 }
 
 pub type DupdupProgressCallback = Option<extern "C" fn(progress: *const DupdupProgress, user_data: *mut libc::c_void)>;
 
+#[repr(C)]
+pub struct DupdupPrescanTotals {
+    pub total_files: u64,
+    pub total_bytes: u64,
+}
+
+#[repr(C)]
+pub struct DupdupPrescanProgress {
+    pub files_seen: u64,
+    pub bytes_seen: u64,
+    pub dirs_seen: u64,
+    pub current_path: *const c_char,
+}
+
+pub type DupdupPrescanCallback =
+    Option<extern "C" fn(progress: *const DupdupPrescanProgress, user_data: *mut libc::c_void)>;
+
 const FFI_ABI_MAJOR: u32 = 1;
-const FFI_ABI_MINOR: u32 = 0;
+const FFI_ABI_MINOR: u32 = 1;
 const FFI_ABI_PATCH: u32 = 0;
 
 #[repr(C)]
@@ -263,6 +285,168 @@ pub unsafe extern "C" fn dupdupninja_scan_folder_to_sqlite_with_progress(
                 files_hashed: progress.files_hashed,
                 files_skipped: progress.files_skipped,
                 bytes_seen: progress.bytes_seen,
+                total_files: progress.total_files,
+                total_bytes: progress.total_bytes,
+                current_path: c_path.as_ptr(),
+            };
+            cb(&payload, user_data);
+        }
+    });
+
+    match result {
+        Ok(_) => DupdupStatus::Ok,
+        Err(e) => {
+            set_last_error(e.to_string());
+            DupdupStatus::Error
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dupdupninja_prescan_folder(
+    root_path: *const c_char,
+    cancel_token: *mut DupdupCancelToken,
+    progress_cb: DupdupPrescanCallback,
+    user_data: *mut libc::c_void,
+    out_totals: *mut DupdupPrescanTotals,
+) -> DupdupStatus {
+    ok_last_error();
+
+    if root_path.is_null() {
+        set_last_error("root_path is null");
+        return DupdupStatus::NullPointer;
+    }
+    if out_totals.is_null() {
+        set_last_error("out_totals is null");
+        return DupdupStatus::NullPointer;
+    }
+
+    let root_path = match c_path(root_path) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(e);
+            return DupdupStatus::InvalidArgument;
+        }
+    };
+
+    let cfg = ScanConfig {
+        root: root_path,
+        root_kind: ScanRootKind::Folder,
+        hash_files: false,
+    };
+
+    let cancel_ref = if cancel_token.is_null() {
+        None
+    } else {
+        Some(&(*cancel_token).token)
+    };
+
+    let result = prescan(&cfg, cancel_ref, |progress: &PrescanProgress| {
+        if let Some(cb) = progress_cb {
+            let path = progress.current_path.to_string_lossy();
+            let c_path = CString::new(path.as_ref()).unwrap_or_else(|_| CString::new("").unwrap());
+            let payload = DupdupPrescanProgress {
+                files_seen: progress.files_seen,
+                bytes_seen: progress.bytes_seen,
+                dirs_seen: progress.dirs_seen,
+                current_path: c_path.as_ptr(),
+            };
+            cb(&payload, user_data);
+        }
+    });
+
+    match result {
+        Ok(totals) => {
+            (*out_totals) = DupdupPrescanTotals {
+                total_files: totals.files,
+                total_bytes: totals.bytes,
+            };
+            DupdupStatus::Ok
+        }
+        Err(e) => {
+            set_last_error(e.to_string());
+            DupdupStatus::Error
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dupdupninja_scan_folder_to_sqlite_with_progress_and_totals(
+    engine: *mut DupdupEngine,
+    root_path: *const c_char,
+    db_path: *const c_char,
+    cancel_token: *mut DupdupCancelToken,
+    total_files: u64,
+    total_bytes: u64,
+    progress_cb: DupdupProgressCallback,
+    user_data: *mut libc::c_void,
+) -> DupdupStatus {
+    ok_last_error();
+
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return DupdupStatus::NullPointer;
+    }
+    if root_path.is_null() {
+        set_last_error("root_path is null");
+        return DupdupStatus::NullPointer;
+    }
+    if db_path.is_null() {
+        set_last_error("db_path is null");
+        return DupdupStatus::NullPointer;
+    }
+
+    let root_path = match c_path(root_path) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(e);
+            return DupdupStatus::InvalidArgument;
+        }
+    };
+    let db_path = match c_path(db_path) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(e);
+            return DupdupStatus::InvalidArgument;
+        }
+    };
+
+    let store = match SqliteScanStore::open(&db_path) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(e.to_string());
+            return DupdupStatus::Error;
+        }
+    };
+
+    let cfg = ScanConfig {
+        root: root_path,
+        root_kind: ScanRootKind::Folder,
+        hash_files: true,
+    };
+
+    let cancel_ref = if cancel_token.is_null() {
+        None
+    } else {
+        Some(&(*cancel_token).token)
+    };
+
+    let totals = ScanTotals {
+        files: total_files,
+        bytes: total_bytes,
+    };
+
+    let result = scan_to_sqlite_with_progress_and_totals(&cfg, &store, cancel_ref, Some(totals), |progress| {
+        if let Some(cb) = progress_cb {
+            let path = progress.current_path.to_string_lossy();
+            let c_path = CString::new(path.as_ref()).unwrap_or_else(|_| CString::new("").unwrap());
+            let payload = DupdupProgress {
+                files_seen: progress.files_seen,
+                files_hashed: progress.files_hashed,
+                files_skipped: progress.files_skipped,
+                bytes_seen: progress.bytes_seen,
+                total_files: progress.total_files,
+                total_bytes: progress.total_bytes,
                 current_path: c_path.as_ptr(),
             };
             cb(&payload, user_data);

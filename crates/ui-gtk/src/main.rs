@@ -181,6 +181,8 @@ fn main() {
             cancel_button: cancel_button.clone(),
             cancel_token: None,
             update_tx: update_tx.clone(),
+            total_files: 0,
+            total_bytes: 0,
         });
 
         let ui_state_for_cancel = ui_state.clone();
@@ -197,10 +199,28 @@ fn main() {
             while let Ok(update) = update_rx.try_recv() {
                 if let Some(state) = ui_state_for_updates.borrow_mut().as_mut() {
                     match update {
-                        UiUpdate::Progress { text } => {
+                        UiUpdate::PrescanProgress { text } => {
                             state.status_label.set_text(&text);
-                            state.progress.set_text(Some("Scanning..."));
+                            state.progress.set_text(Some("Preparing..."));
                             state.progress.pulse();
+                        }
+                        UiUpdate::PrescanDone { totals } => {
+                            state.total_files = totals.files;
+                            state.total_bytes = totals.bytes;
+                            state.status_label.set_text("Status: Scanning...");
+                            state.progress.set_fraction(0.0);
+                            state.progress.set_text(Some("0%"));
+                        }
+                        UiUpdate::Progress { text, fraction } => {
+                            state.status_label.set_text(&text);
+                            if let Some(fraction) = fraction {
+                                state.progress.set_fraction(fraction.clamp(0.0, 1.0));
+                                let percent = (fraction * 100.0).round() as u32;
+                                state.progress.set_text(Some(&format!("{percent}%")));
+                            } else {
+                                state.progress.set_text(Some("Scanning..."));
+                                state.progress.pulse();
+                            }
                         }
                         UiUpdate::Done { text } => {
                             state.status_label.set_text(&text);
@@ -208,6 +228,8 @@ fn main() {
                             state.progress.set_fraction(0.0);
                             state.cancel_button.set_sensitive(false);
                             state.cancel_token = None;
+                            state.total_files = 0;
+                            state.total_bytes = 0;
                         }
                         UiUpdate::Error { text } => {
                             state.status_label.set_text(&text);
@@ -215,6 +237,8 @@ fn main() {
                             state.progress.set_fraction(0.0);
                             state.cancel_button.set_sensitive(false);
                             state.cancel_token = None;
+                            state.total_files = 0;
+                            state.total_bytes = 0;
                         }
                     }
                 }
@@ -236,11 +260,15 @@ struct UiState {
     cancel_button: gtk4::Button,
     cancel_token: Option<dupdupninja_core::scan::ScanCancelToken>,
     update_tx: std::sync::mpsc::Sender<UiUpdate>,
+    total_files: u64,
+    total_bytes: u64,
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]
 enum UiUpdate {
-    Progress { text: String },
+    PrescanProgress { text: String },
+    PrescanDone { totals: dupdupninja_core::scan::ScanTotals },
+    Progress { text: String, fraction: Option<f64> },
     Done { text: String },
     Error { text: String },
 }
@@ -295,24 +323,61 @@ fn start_scan(
             hash_files: true,
         };
 
-        let result = dupdupninja_core::scan::scan_to_sqlite_with_progress(
+    let prescan_result = dupdupninja_core::scan::prescan(&cfg, Some(&cancel_token), |progress| {
+            let folder = progress
+                .current_path
+                .file_name()
+                .and_then(|p| p.to_str())
+                .unwrap_or("folder");
+            let text = format!(
+                "Status: Preparing {} ({} files)",
+                folder, progress.files_seen
+            );
+            let _ = update_tx.send(UiUpdate::PrescanProgress { text });
+        });
+
+        let totals = match prescan_result {
+            Ok(totals) => totals,
+            Err(dupdupninja_core::Error::Cancelled) => {
+                let _ = update_tx.send(UiUpdate::Done {
+                    text: "Status: Scan cancelled".to_string(),
+                });
+                return;
+            }
+            Err(err) => {
+                let _ = update_tx.send(UiUpdate::Error {
+                    text: format!("Status: Prescan error: {err}"),
+                });
+                return;
+            }
+        };
+
+        let _ = update_tx.send(UiUpdate::PrescanDone { totals });
+
+        let result = dupdupninja_core::scan::scan_to_sqlite_with_progress_and_totals(
             &cfg,
             &store,
             Some(&cancel_token),
+            Some(totals),
             |progress_update| {
                 let path = progress_update
                     .current_path
-                    .file_name()
+                    .parent()
+                    .and_then(|p| p.file_name())
                     .and_then(|p| p.to_str())
-                    .unwrap_or("file");
+                    .unwrap_or("folder");
                 let text = format!(
-                    "Status: Scanning {} ({} files, {} hashed, {} skipped)",
+                    "Status: Scanning {} ({} / {} files)",
                     path,
                     progress_update.files_seen,
-                    progress_update.files_hashed,
-                    progress_update.files_skipped
+                    progress_update.total_files
                 );
-                let _ = update_tx.send(UiUpdate::Progress { text });
+                let fraction = if progress_update.total_files > 0 {
+                    Some(progress_update.files_seen as f64 / progress_update.total_files as f64)
+                } else {
+                    None
+                };
+                let _ = update_tx.send(UiUpdate::Progress { text, fraction });
             },
         );
 

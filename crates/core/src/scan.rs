@@ -61,6 +61,8 @@ pub struct ScanProgress {
     pub files_hashed: u64,
     pub files_skipped: u64,
     pub bytes_seen: u64,
+    pub total_files: u64,
+    pub total_bytes: u64,
     pub current_path: PathBuf,
 }
 
@@ -68,6 +70,25 @@ pub fn scan_to_sqlite_with_progress<F>(
     config: &ScanConfig,
     store: &SqliteScanStore,
     cancel: Option<&ScanCancelToken>,
+    on_progress: F,
+) -> Result<ScanResult>
+where
+    F: FnMut(&ScanProgress),
+{
+    scan_to_sqlite_with_progress_and_totals(config, store, cancel, None, on_progress)
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ScanTotals {
+    pub files: u64,
+    pub bytes: u64,
+}
+
+pub fn scan_to_sqlite_with_progress_and_totals<F>(
+    config: &ScanConfig,
+    store: &SqliteScanStore,
+    cancel: Option<&ScanCancelToken>,
+    totals: Option<ScanTotals>,
     mut on_progress: F,
 ) -> Result<ScanResult>
 where
@@ -96,6 +117,7 @@ where
 
     let mut stats = ScanStats::default();
     let mut bytes_seen = 0u64;
+    let totals = totals.unwrap_or_default();
     for entry in WalkDir::new(&config.root).follow_links(false).into_iter() {
         if let Some(cancel) = cancel {
             if cancel.is_cancelled() {
@@ -153,11 +175,85 @@ where
             files_hashed: stats.files_hashed,
             files_skipped: stats.files_skipped,
             bytes_seen,
+            total_files: totals.files,
+            total_bytes: totals.bytes,
             current_path: path,
         });
     }
 
     Ok(ScanResult { scan_id, stats })
+}
+
+#[derive(Debug, Clone)]
+pub struct PrescanProgress {
+    pub files_seen: u64,
+    pub bytes_seen: u64,
+    pub dirs_seen: u64,
+    pub current_path: PathBuf,
+}
+
+pub fn prescan<F>(
+    config: &ScanConfig,
+    cancel: Option<&ScanCancelToken>,
+    mut on_progress: F,
+) -> Result<ScanTotals>
+where
+    F: FnMut(&PrescanProgress),
+{
+    if !config.root.exists() {
+        return Err(Error::InvalidArgument(format!(
+            "root does not exist: {}",
+            config.root.to_string_lossy()
+        )));
+    }
+
+    let mut files = 0u64;
+    let mut bytes = 0u64;
+    let mut dirs = 0u64;
+
+    for entry in WalkDir::new(&config.root).follow_links(false).into_iter() {
+        if let Some(cancel) = cancel {
+            if cancel.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
+        }
+
+        let entry = match entry {
+            Ok(v) => v,
+            Err(_) => {
+                continue;
+            }
+        };
+
+        if entry.file_type().is_dir() {
+            dirs += 1;
+            on_progress(&PrescanProgress {
+                files_seen: files,
+                bytes_seen: bytes,
+                dirs_seen: dirs,
+                current_path: entry.path().to_path_buf(),
+            });
+            continue;
+        }
+
+        if !entry.file_type().is_file() {
+            continue;
+        }
+
+        files += 1;
+        if let Ok(md) = entry.metadata() {
+            bytes = bytes.saturating_add(md.len());
+        }
+
+        on_progress(&PrescanProgress {
+            files_seen: files,
+            bytes_seen: bytes,
+            dirs_seen: dirs,
+            current_path: entry.path().to_path_buf(),
+        });
+    }
+
+    Ok(ScanTotals { files, bytes })
 }
 
 fn relative_to_root(root: &Path, path: &Path) -> Option<PathBuf> {

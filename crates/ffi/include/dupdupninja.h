@@ -14,7 +14,7 @@ typedef struct DupdupCancelToken DupdupCancelToken;
 
 enum {
   DUPDUPNINJA_FFI_ABI_MAJOR = 1,
-  DUPDUPNINJA_FFI_ABI_MINOR = 0,
+  DUPDUPNINJA_FFI_ABI_MINOR = 1,
   DUPDUPNINJA_FFI_ABI_PATCH = 0,
 };
 
@@ -36,10 +36,26 @@ typedef struct DupdupProgress {
   uint64_t files_hashed;
   uint64_t files_skipped;
   uint64_t bytes_seen;
+  uint64_t total_files;
+  uint64_t total_bytes;
   const char* current_path;
 } DupdupProgress;
 
 typedef void (*DupdupProgressCallback)(const DupdupProgress* progress, void* user_data);
+
+typedef struct DupdupPrescanTotals {
+  uint64_t total_files;
+  uint64_t total_bytes;
+} DupdupPrescanTotals;
+
+typedef struct DupdupPrescanProgress {
+  uint64_t files_seen;
+  uint64_t bytes_seen;
+  uint64_t dirs_seen;
+  const char* current_path;
+} DupdupPrescanProgress;
+
+typedef void (*DupdupPrescanCallback)(const DupdupPrescanProgress* progress, void* user_data);
 
 // Returns the FFI library version (semantic version).
 DupdupNinjaVersion dupdupninja_ffi_version(void);
@@ -71,6 +87,25 @@ DupdupStatus dupdupninja_scan_folder_to_sqlite_with_progress(
   const char* root_path,
   const char* db_path,
   DupdupCancelToken* cancel_token,
+  DupdupProgressCallback progress_cb,
+  void* user_data
+);
+
+DupdupStatus dupdupninja_prescan_folder(
+  const char* root_path,
+  DupdupCancelToken* cancel_token,
+  DupdupPrescanCallback progress_cb,
+  void* user_data,
+  DupdupPrescanTotals* out_totals
+);
+
+DupdupStatus dupdupninja_scan_folder_to_sqlite_with_progress_and_totals(
+  DupdupEngine* engine,
+  const char* root_path,
+  const char* db_path,
+  DupdupCancelToken* cancel_token,
+  uint64_t total_files,
+  uint64_t total_bytes,
   DupdupProgressCallback progress_cb,
   void* user_data
 );
