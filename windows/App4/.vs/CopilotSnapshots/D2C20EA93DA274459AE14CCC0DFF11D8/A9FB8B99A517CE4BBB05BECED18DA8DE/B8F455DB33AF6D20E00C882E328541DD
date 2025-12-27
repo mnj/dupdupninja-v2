@@ -1,0 +1,49 @@
+﻿using Microsoft.UI.Text;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+
+namespace App4;
+
+public sealed class AboutPage : Page
+{
+    public AboutPage()
+    {
+        Content = BuildContent();
+    }
+
+    private UIElement BuildContent()
+    {
+        var stack = new StackPanel
+        {
+            Spacing = 16,
+            Padding = new Thickness(24)
+        };
+
+        stack.Children.Add(new TextBlock
+        {
+            Text = "About",
+            FontSize = 28,
+            FontWeight = FontWeights.SemiBold
+        });
+
+        stack.Children.Add(new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            Text = "This sample application demonstrates how to host multiple pages inside a single window."
+        });
+
+        stack.Children.Add(new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            Text = "Version 1.0.0"
+        });
+
+        stack.Children.Add(new TextBlock
+        {
+            TextWrapping = TextWrapping.Wrap,
+            Text = "Built with WinUI 3 on .NET 8."
+        });
+
+        return new ScrollViewer { Content = stack };
+    }
+}

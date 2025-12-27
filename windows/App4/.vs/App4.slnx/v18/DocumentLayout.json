@@ -1,0 +1,139 @@
+{
+  "Version": 1,
+  "WorkspaceRootPath": "C:\\Users\\mij\\source\\repos\\App4\\",
+  "Documents": [
+    {
+      "AbsoluteMoniker": "D:0:0:{42A2A275-8901-4252-A2FA-5C4079BF15BB}|App4\\App4.csproj|c:\\users\\mij\\source\\repos\\app4\\app4\\mainwindow.xaml||{F11ACC28-31D1-4C80-A34B-F4E09D3D753C}",
+      "RelativeMoniker": "D:0:0:{42A2A275-8901-4252-A2FA-5C4079BF15BB}|App4\\App4.csproj|solutionrelative:app4\\mainwindow.xaml||{F11ACC28-31D1-4C80-A34B-F4E09D3D753C}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{42A2A275-8901-4252-A2FA-5C4079BF15BB}|App4\\App4.csproj|c:\\users\\mij\\source\\repos\\app4\\app4\\mainwindow.xaml.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{42A2A275-8901-4252-A2FA-5C4079BF15BB}|App4\\App4.csproj|solutionrelative:app4\\mainwindow.xaml.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{42A2A275-8901-4252-A2FA-5C4079BF15BB}|App4\\App4.csproj|c:\\users\\mij\\source\\repos\\app4\\app4\\aboutwindow.xaml.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{42A2A275-8901-4252-A2FA-5C4079BF15BB}|App4\\App4.csproj|solutionrelative:app4\\aboutwindow.xaml.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{42A2A275-8901-4252-A2FA-5C4079BF15BB}|App4\\App4.csproj|c:\\users\\mij\\source\\repos\\app4\\app4\\settingswindow.xaml||{F11ACC28-31D1-4C80-A34B-F4E09D3D753C}",
+      "RelativeMoniker": "D:0:0:{42A2A275-8901-4252-A2FA-5C4079BF15BB}|App4\\App4.csproj|solutionrelative:app4\\settingswindow.xaml||{F11ACC28-31D1-4C80-A34B-F4E09D3D753C}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{42A2A275-8901-4252-A2FA-5C4079BF15BB}|App4\\App4.csproj|c:\\users\\mij\\source\\repos\\app4\\app4\\aboutwindow.xaml||{F11ACC28-31D1-4C80-A34B-F4E09D3D753C}",
+      "RelativeMoniker": "D:0:0:{42A2A275-8901-4252-A2FA-5C4079BF15BB}|App4\\App4.csproj|solutionrelative:app4\\aboutwindow.xaml||{F11ACC28-31D1-4C80-A34B-F4E09D3D753C}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{42A2A275-8901-4252-A2FA-5C4079BF15BB}|App4\\App4.csproj|c:\\users\\mij\\source\\repos\\app4\\app4\\app4.csproj||{FA3CD31E-987B-443A-9B81-186104E8DAC1}",
+      "RelativeMoniker": "D:0:0:{42A2A275-8901-4252-A2FA-5C4079BF15BB}|App4\\App4.csproj|solutionrelative:app4\\app4.csproj||{FA3CD31E-987B-443A-9B81-186104E8DAC1}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{42A2A275-8901-4252-A2FA-5C4079BF15BB}|App4\\App4.csproj|c:\\users\\mij\\source\\repos\\app4\\app4\\settingswindow.xaml.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{42A2A275-8901-4252-A2FA-5C4079BF15BB}|App4\\App4.csproj|solutionrelative:app4\\settingswindow.xaml.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    }
+  ],
+  "DocumentGroupContainers": [
+    {
+      "Orientation": 0,
+      "VerticalTabListWidth": 256,
+      "DocumentGroups": [
+        {
+          "DockedWidth": 200,
+          "SelectedChildIndex": 6,
+          "Children": [
+            {
+              "$type": "Document",
+              "DocumentIndex": 2,
+              "Title": "AboutWindow.xaml.cs",
+              "DocumentMoniker": "C:\\Users\\mij\\source\\repos\\App4\\App4\\AboutWindow.xaml.cs",
+              "RelativeDocumentMoniker": "App4\\AboutWindow.xaml.cs",
+              "ToolTip": "C:\\Users\\mij\\source\\repos\\App4\\App4\\AboutWindow.xaml.cs",
+              "RelativeToolTip": "App4\\AboutWindow.xaml.cs",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAABoAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2025-12-27T15:51:10.7Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 4,
+              "Title": "AboutWindow.xaml",
+              "DocumentMoniker": "C:\\Users\\mij\\source\\repos\\App4\\App4\\AboutWindow.xaml",
+              "RelativeDocumentMoniker": "App4\\AboutWindow.xaml",
+              "ToolTip": "C:\\Users\\mij\\source\\repos\\App4\\App4\\AboutWindow.xaml",
+              "RelativeToolTip": "App4\\AboutWindow.xaml",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAABkAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.003549|",
+              "WhenOpened": "2025-12-27T15:51:07.081Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 6,
+              "Title": "SettingsWindow.xaml.cs",
+              "DocumentMoniker": "C:\\Users\\mij\\source\\repos\\App4\\App4\\SettingsWindow.xaml.cs",
+              "RelativeDocumentMoniker": "App4\\SettingsWindow.xaml.cs",
+              "ToolTip": "C:\\Users\\mij\\source\\repos\\App4\\App4\\SettingsWindow.xaml.cs",
+              "RelativeToolTip": "App4\\SettingsWindow.xaml.cs",
+              "ViewState": "AgIAABcAAAAAAAAAAABRwBoAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2025-12-27T15:51:01.777Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 3,
+              "Title": "SettingsWindow.xaml",
+              "DocumentMoniker": "C:\\Users\\mij\\source\\repos\\App4\\App4\\SettingsWindow.xaml",
+              "RelativeDocumentMoniker": "App4\\SettingsWindow.xaml",
+              "ToolTip": "C:\\Users\\mij\\source\\repos\\App4\\App4\\SettingsWindow.xaml",
+              "RelativeToolTip": "App4\\SettingsWindow.xaml",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAABoAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.003549|",
+              "WhenOpened": "2025-12-27T15:50:59.213Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 5,
+              "Title": "App4",
+              "DocumentMoniker": "C:\\Users\\mij\\source\\repos\\App4\\App4\\App4.csproj",
+              "RelativeDocumentMoniker": "App4\\App4.csproj",
+              "ToolTip": "C:\\Users\\mij\\source\\repos\\App4\\App4\\App4.csproj",
+              "RelativeToolTip": "App4\\App4.csproj",
+              "ViewState": "AgIAADsAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000758|",
+              "WhenOpened": "2025-12-27T15:43:53.099Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 1,
+              "Title": "MainWindow.xaml.cs",
+              "DocumentMoniker": "C:\\Users\\mij\\source\\repos\\App4\\App4\\MainWindow.xaml.cs",
+              "RelativeDocumentMoniker": "App4\\MainWindow.xaml.cs",
+              "ToolTip": "C:\\Users\\mij\\source\\repos\\App4\\App4\\MainWindow.xaml.cs",
+              "RelativeToolTip": "App4\\MainWindow.xaml.cs",
+              "ViewState": "AgIAAD8AAAAAAAAAAAAAwHYAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2025-12-27T15:42:13.041Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "MainWindow.xaml",
+              "DocumentMoniker": "C:\\Users\\mij\\source\\repos\\App4\\App4\\MainWindow.xaml",
+              "RelativeDocumentMoniker": "App4\\MainWindow.xaml",
+              "ToolTip": "C:\\Users\\mij\\source\\repos\\App4\\App4\\MainWindow.xaml",
+              "RelativeToolTip": "App4\\MainWindow.xaml",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.003549|",
+              "WhenOpened": "2025-12-27T15:42:03.228Z",
+              "EditorCaption": ""
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

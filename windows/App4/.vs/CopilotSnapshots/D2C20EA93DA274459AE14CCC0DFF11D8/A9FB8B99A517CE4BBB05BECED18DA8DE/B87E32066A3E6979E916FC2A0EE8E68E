@@ -1,0 +1,47 @@
+﻿using Microsoft.UI.Text;
+using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+
+namespace App4;
+
+public sealed class SettingsPage : Page
+{
+    public SettingsPage()
+    {
+        Content = BuildContent();
+    }
+
+    private UIElement BuildContent()
+    {
+        var stack = new StackPanel
+        {
+            Spacing = 16,
+            Padding = new Thickness(24)
+        };
+
+        stack.Children.Add(new TextBlock
+        {
+            Text = "Settings",
+            FontSize = 28,
+            FontWeight = FontWeights.SemiBold
+        });
+
+        stack.Children.Add(new ToggleSwitch
+        {
+            Header = "Enable notifications",
+            IsOn = true
+        });
+
+        stack.Children.Add(new ToggleSwitch
+        {
+            Header = "Use compact layout"
+        });
+
+        var zoomPanel = new StackPanel { Spacing = 8 };
+        zoomPanel.Children.Add(new TextBlock { Text = "Default zoom" });
+        zoomPanel.Children.Add(new Slider { Minimum = 50, Maximum = 150, Value = 100 });
+        stack.Children.Add(zoomPanel);
+
+        return new ScrollViewer { Content = stack };
+    }
+}
