@@ -4,6 +4,7 @@ import AppKit
 @main
 struct DupdupNinjaApp: App {
     @State private var statusText: String = "dupdupninja (SwiftUI skeleton)"
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Scene {
         WindowGroup {
@@ -11,6 +12,12 @@ struct DupdupNinjaApp: App {
                 .frame(minWidth: 900, minHeight: 600)
         }
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button("About dupdupninja") {
+                    openWindow(id: "about")
+                }
+            }
+
             CommandMenu("Scan") {
                 Button("Scan Folder…") {
                     if let url = pickDirectory(title: "Select a folder to scan", initial: nil) {
@@ -37,6 +44,16 @@ struct DupdupNinjaApp: App {
                 }
             }
         }
+
+        Window("About dupdupninja", id: "about") {
+            AboutView()
+                .frame(minWidth: 420, minHeight: 240)
+        }
+
+        Settings {
+            SettingsView()
+                .frame(minWidth: 520, minHeight: 360)
+        }
     }
 }
 
@@ -50,6 +67,33 @@ private struct ContentView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(24)
         }
+    }
+}
+
+private struct AboutView: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("dupdupninja")
+                .font(.system(size: 20, weight: .semibold))
+            Text("Cross-platform duplicate/near-duplicate media finder.")
+                .font(.system(size: 13))
+            Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0")")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        }
+        .padding(20)
+    }
+}
+
+private struct SettingsView: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Settings")
+                .font(.system(size: 20, weight: .semibold))
+            Text("Settings are not implemented yet.")
+                .font(.system(size: 13))
+        }
+        .padding(20)
     }
 }
 
