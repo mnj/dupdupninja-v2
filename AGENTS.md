@@ -24,6 +24,7 @@ This repo starts as a Rust workspace with a compiling skeleton; platform UIs are
   - C ABI (`extern "C"`) with opaque handles and explicit free functions.
   - Thread-local `dupdupninja_last_error_message()` (or an explicit error struct) for error reporting.
   - Avoid leaking Rust types across the boundary.
+- All code changes must be verified to compile successfully.
 
 ## Dev commands
 - Build: `cargo build`

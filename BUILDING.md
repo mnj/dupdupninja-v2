@@ -48,22 +48,43 @@ GTK is behind a feature so the workspace builds without GTK dev packages.
 cargo run -p dupdupninja-ui-gtk --features gtk
 ```
 
+## Linux (Debian 13/Trixie, GTK4)
+
+### Prereqs
+
+```bash
+sudo apt update
+sudo apt install -y build-essential pkg-config libgtk-4-dev
+```
+
+### Build/run GTK UI
+
+GTK is behind a feature so the workspace builds without GTK dev packages.
+
+```bash
+cargo run -p dupdupninja-ui-gtk --features gtk
+```
+
+### GNOME / GTK minimum
+
+The GTK UI opts into GTK 4.16 APIs (`v4_16`), which aligns with GNOME 48 as shipped in Debian 13/Trixie.
+
 ## Windows 11 (x64)
 
-### Prereqs (WinUI 3 app)
+### Prereqs (WinUI 3 app, C++/WinRT)
 
 - Windows 11 x64
-- Visual Studio 2022 and/or .NET SDK (project targets `net8.0-windows10.0.19041.0`)
+- Visual Studio 2022 with:
+  - Desktop development with C++
+  - Windows App SDK / WinUI 3 tooling
+  - C++/WinRT support
+- Windows 10/11 SDK (10.0.19041+)
 - Windows App SDK runtime installed (unpackaged apps rely on it being present)
 
 ### Build/run WinUI 3 app
 
-From `windows/DupdupNinjaWinUI`:
-
-```powershell
-dotnet restore
-dotnet run
-```
+From `windows/DupdupNinjaWinUI`, open `DupdupNinjaWinUI.sln` in Visual Studio,
+restore NuGet packages, then build and run the `DupdupNinjaWinUI` project.
 
 ## macOS (SwiftUI + Rust core via C ABI)
 

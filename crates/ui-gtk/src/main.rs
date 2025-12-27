@@ -78,8 +78,57 @@ fn main() {
     ));
     app.add_action(&scan_disk);
 
+    let settings = gio::SimpleAction::new("settings", None);
+    settings.connect_activate(glib::clone!(
+        #[weak]
+        app,
+        move |_, _| {
+            if let Some(window) = app.active_window() {
+                let settings_window = gtk::Window::builder()
+                    .transient_for(&window)
+                    .title("Settings")
+                    .default_width(520)
+                    .default_height(360)
+                    .modal(true)
+                    .build();
+                let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+                content.set_margin_top(18);
+                content.set_margin_bottom(18);
+                content.set_margin_start(18);
+                content.set_margin_end(18);
+                content.append(&gtk::Label::new(Some(
+                    "Settings are not implemented yet.",
+                )));
+                settings_window.set_child(Some(&content));
+                settings_window.present();
+            }
+        }
+    ));
+    app.add_action(&settings);
+    app.set_accels_for_action("app.settings", &["<primary>comma"]);
+
+    let about = gio::SimpleAction::new("about", None);
+    about.connect_activate(glib::clone!(
+        #[weak]
+        app,
+        move |_, _| {
+            if let Some(window) = app.active_window() {
+                let dialog = gtk::AboutDialog::builder()
+                    .transient_for(&window)
+                    .modal(true)
+                    .program_name("dupdupninja")
+                    .version(env!("CARGO_PKG_VERSION"))
+                    .comments("Cross-platform duplicate/near-duplicate media finder.")
+                    .build();
+                dialog.present();
+            }
+        }
+    ));
+    app.add_action(&about);
+
     let menubar = gio::Menu::new();
     let file_menu = gio::Menu::new();
+    file_menu.append(Some("Settings…"), Some("app.settings"));
     file_menu.append(Some("Exit"), Some("app.quit"));
     menubar.append_submenu(Some("File"), &file_menu);
 
@@ -88,12 +137,30 @@ fn main() {
     scan_menu.append(Some("Disk…"), Some("app.scan_disk"));
     menubar.append_submenu(Some("Scan"), &scan_menu);
 
+    let help_menu = gio::Menu::new();
+    help_menu.append(Some("About"), Some("app.about"));
+    menubar.append_submenu(Some("Help"), &help_menu);
+
     app.set_menubar(Some(&menubar));
 
-    app.connect_activate(|app| {
+    let app_menu = gio::Menu::new();
+    app_menu.append(Some("Settings…"), Some("app.settings"));
+    app_menu.append(Some("About"), Some("app.about"));
+    app_menu.append(Some("Exit"), Some("app.quit"));
+
+    app.connect_activate(move |app| {
         let window = gtk::ApplicationWindow::new(app);
         window.set_title(Some("dupdupninja"));
         window.set_default_size(1100, 720);
+
+        let header = gtk::HeaderBar::new();
+        let menu_button = gtk::MenuButton::new();
+        menu_button.set_icon_name("open-menu-symbolic");
+        let popover = gtk::PopoverMenu::from_model(Some(&app_menu));
+        menu_button.set_popover(Some(&popover));
+        header.pack_end(&menu_button);
+        window.set_titlebar(Some(&header));
+
         window.present();
         window.maximize();
     });
