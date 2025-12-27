@@ -188,16 +188,23 @@ async fn select_mount_path(window: &gtk4::Window) -> Option<std::path::PathBuf> 
     list.add_css_class("boxed-list");
     content.append(&list);
 
-    let monitor = gio::VolumeMonitor::get();
-    for mount in monitor.mounts() {
-        let root = mount.root();
-        let path = match root.path() {
-            Some(path) => path,
-            None => continue,
-        };
-        let label = format!("{}  ({})", mount.name(), path.display());
+    let mut entries = mount_entries_from_proc();
+    if entries.is_empty() {
+        let monitor = gio::VolumeMonitor::get();
+        for mount in monitor.mounts() {
+            let root = mount.root();
+            let path = match root.path() {
+                Some(path) => path,
+                None => continue,
+            };
+            let label = format!("{}  ({})", mount.name(), path.display());
+            entries.push(MountEntry { label, path });
+        }
+    }
+
+    for entry in entries {
         let row = gtk::ListBoxRow::new();
-        let text = gtk::Label::new(Some(&label));
+        let text = gtk::Label::new(Some(&entry.label));
         text.set_xalign(0.0);
         text.set_margin_top(6);
         text.set_margin_bottom(6);
@@ -207,7 +214,7 @@ async fn select_mount_path(window: &gtk4::Window) -> Option<std::path::PathBuf> 
         row.set_activatable(true);
         row.set_selectable(true);
         unsafe {
-            row.set_data("mount-path", path);
+            row.set_data("mount-path", entry.path);
         }
         list.append(&row);
     }
@@ -224,6 +231,111 @@ async fn select_mount_path(window: &gtk4::Window) -> Option<std::path::PathBuf> 
 
     dialog.close();
     selection
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+struct MountEntry {
+    label: String,
+    path: std::path::PathBuf,
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn mount_entries_from_proc() -> Vec<MountEntry> {
+    use std::collections::BTreeMap;
+    use std::fs;
+    use std::path::PathBuf;
+
+    let contents = match fs::read_to_string("/proc/self/mountinfo") {
+        Ok(contents) => contents,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut entries: BTreeMap<PathBuf, String> = BTreeMap::new();
+    for line in contents.lines() {
+        let mut parts = line.split(" - ");
+        let left = match parts.next() {
+            Some(left) => left,
+            None => continue,
+        };
+        let right = match parts.next() {
+            Some(right) => right,
+            None => continue,
+        };
+
+        let left_fields: Vec<&str> = left.split_whitespace().collect();
+        if left_fields.len() < 5 {
+            continue;
+        }
+        let mount_point = unescape_mount_field(left_fields[4]);
+        let right_fields: Vec<&str> = right.split_whitespace().collect();
+        if right_fields.len() < 2 {
+            continue;
+        }
+        let fs_type = right_fields[0];
+        let source = right_fields[1];
+
+        if !should_include_mount(source, &mount_point) {
+            continue;
+        }
+
+        let path = PathBuf::from(&mount_point);
+        let label = format!("{source}  ({mount_point}) [{fs_type}]");
+        entries.entry(path).or_insert(label);
+    }
+
+    entries
+        .into_iter()
+        .map(|(path, label)| MountEntry { path, label })
+        .collect()
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn should_include_mount(source: &str, mount_point: &str) -> bool {
+    source.starts_with("/dev/")
+        || mount_point == "/"
+        || mount_point.starts_with("/run/media/")
+        || mount_point.starts_with("/media/")
+        || mount_point.starts_with("/mnt/")
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn unescape_mount_field(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            let a = chars.next();
+            let b = chars.next();
+            let c = chars.next();
+            if let (Some(a), Some(b), Some(c)) = (a, b, c) {
+                if a.is_ascii_digit() && b.is_ascii_digit() && c.is_ascii_digit() {
+                    let oct = [a, b, c].iter().collect::<String>();
+                    if let Ok(val) = u8::from_str_radix(&oct, 8) {
+                        out.push(val as char);
+                        continue;
+                    }
+                }
+                out.push('\\');
+                out.push(a);
+                out.push(b);
+                out.push(c);
+                continue;
+            }
+            out.push('\\');
+            if let Some(a) = a {
+                out.push(a);
+            }
+            if let Some(b) = b {
+                out.push(b);
+            }
+            if let Some(c) = c {
+                out.push(c);
+            }
+            continue;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 #[cfg(not(all(target_os = "linux", feature = "gtk")))]
