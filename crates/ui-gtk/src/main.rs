@@ -1,13 +1,16 @@
 #[cfg(all(target_os = "linux", feature = "gtk"))]
 fn main() {
+    use adw::prelude::*;
     use gtk4 as gtk;
     use gtk::gio;
     use gtk::glib;
-    use gtk::prelude::*;
-
     const APP_ID: &str = "com.dupdupninja.app";
 
-    let app = gtk::Application::new(Some(APP_ID), gio::ApplicationFlags::empty());
+    if let Err(err) = adw::init() {
+        eprintln!("libadwaita init failed: {err}");
+    }
+
+    let app = adw::Application::new(Some(APP_ID), gio::ApplicationFlags::empty());
 
     let quit = gio::SimpleAction::new("quit", None);
     quit.connect_activate(glib::clone!(
@@ -149,11 +152,11 @@ fn main() {
     app_menu.append(Some("Exit"), Some("app.quit"));
 
     app.connect_activate(move |app| {
-        let window = gtk::ApplicationWindow::new(app);
+        let window = adw::ApplicationWindow::new(app);
         window.set_title(Some("dupdupninja"));
         window.set_default_size(1100, 720);
 
-        let header = gtk::HeaderBar::new();
+        let header = adw::HeaderBar::new();
         let menu_button = gtk::MenuButton::new();
         menu_button.set_icon_name("open-menu-symbolic");
         let popover = gtk::PopoverMenu::from_model(Some(&app_menu));

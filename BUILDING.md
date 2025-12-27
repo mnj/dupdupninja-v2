@@ -52,7 +52,7 @@ function and/or embed the ABI major in your loader logic.
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential pkg-config libgtk-4-dev
+sudo apt install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev
 ```
 
 ### Build/run GTK UI
@@ -69,7 +69,7 @@ cargo run -p dupdupninja-ui-gtk --features gtk
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential pkg-config libgtk-4-dev
+sudo apt install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev
 ```
 
 ### Build/run GTK UI

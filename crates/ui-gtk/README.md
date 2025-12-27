@@ -8,7 +8,7 @@ Install system deps:
 
 ```bash
 sudo apt update
-sudo apt install -y libgtk-4-dev pkg-config
+sudo apt install -y libgtk-4-dev libadwaita-1-dev pkg-config
 ```
 
 Build/run with the GTK implementation enabled:
@@ -23,7 +23,7 @@ Install system deps:
 
 ```bash
 sudo apt update
-sudo apt install -y build-essential pkg-config libgtk-4-dev
+sudo apt install -y build-essential pkg-config libgtk-4-dev libadwaita-1-dev
 ```
 
 Build/run with the GTK implementation enabled:

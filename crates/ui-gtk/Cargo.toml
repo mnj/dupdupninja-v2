@@ -12,7 +12,8 @@ path = "src/main.rs"
 dupdupninja-core = { path = "../core" }
 
 [features]
-gtk = ["dep:gtk4"]
+gtk = ["dep:gtk4", "dep:adw"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk4 = { version = "0.9", optional = true, features = ["v4_16"] }
+adw = { package = "libadwaita", version = "0.7", optional = true, features = ["v1_6"] }
