@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use dupdupninja_core::db::SqliteScanStore;
 use dupdupninja_core::models::ScanRootKind;
-use dupdupninja_core::scan::{scan_to_sqlite, ScanConfig};
+use dupdupninja_core::scan::{scan_to_sqlite, scan_to_sqlite_with_progress, ScanCancelToken, ScanConfig};
 
 thread_local! {
     static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
@@ -33,6 +33,22 @@ pub struct DupdupEngine {
 }
 
 struct Engine;
+
+#[repr(C)]
+pub struct DupdupCancelToken {
+    token: ScanCancelToken,
+}
+
+#[repr(C)]
+pub struct DupdupProgress {
+    pub files_seen: u64,
+    pub files_hashed: u64,
+    pub files_skipped: u64,
+    pub bytes_seen: u64,
+    pub current_path: *const c_char,
+}
+
+pub type DupdupProgressCallback = Option<extern "C" fn(progress: *const DupdupProgress, user_data: *mut libc::c_void)>;
 
 const FFI_ABI_MAJOR: u32 = 1;
 const FFI_ABI_MINOR: u32 = 0;
@@ -83,6 +99,33 @@ pub unsafe extern "C" fn dupdupninja_engine_free(engine: *mut DupdupEngine) {
         return;
     }
     drop(Box::from_raw(engine as *mut Engine));
+}
+
+#[no_mangle]
+pub extern "C" fn dupdupninja_cancel_token_new() -> *mut DupdupCancelToken {
+    ok_last_error();
+    let token = DupdupCancelToken {
+        token: ScanCancelToken::new(),
+    };
+    Box::into_raw(Box::new(token))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dupdupninja_cancel_token_free(token: *mut DupdupCancelToken) {
+    ok_last_error();
+    if token.is_null() {
+        return;
+    }
+    drop(Box::from_raw(token));
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dupdupninja_cancel_token_cancel(token: *mut DupdupCancelToken) {
+    ok_last_error();
+    if token.is_null() {
+        return;
+    }
+    (*token).token.cancel();
 }
 
 #[no_mangle]
@@ -144,6 +187,89 @@ pub unsafe extern "C" fn dupdupninja_scan_folder_to_sqlite(
     };
 
     match scan_to_sqlite(&cfg, &store) {
+        Ok(_) => DupdupStatus::Ok,
+        Err(e) => {
+            set_last_error(e.to_string());
+            DupdupStatus::Error
+        }
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn dupdupninja_scan_folder_to_sqlite_with_progress(
+    engine: *mut DupdupEngine,
+    root_path: *const c_char,
+    db_path: *const c_char,
+    cancel_token: *mut DupdupCancelToken,
+    progress_cb: DupdupProgressCallback,
+    user_data: *mut libc::c_void,
+) -> DupdupStatus {
+    ok_last_error();
+
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return DupdupStatus::NullPointer;
+    }
+    if root_path.is_null() {
+        set_last_error("root_path is null");
+        return DupdupStatus::NullPointer;
+    }
+    if db_path.is_null() {
+        set_last_error("db_path is null");
+        return DupdupStatus::NullPointer;
+    }
+
+    let root_path = match c_path(root_path) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(e);
+            return DupdupStatus::InvalidArgument;
+        }
+    };
+    let db_path = match c_path(db_path) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(e);
+            return DupdupStatus::InvalidArgument;
+        }
+    };
+
+    let store = match SqliteScanStore::open(&db_path) {
+        Ok(v) => v,
+        Err(e) => {
+            set_last_error(e.to_string());
+            return DupdupStatus::Error;
+        }
+    };
+
+    let cfg = ScanConfig {
+        root: root_path,
+        root_kind: ScanRootKind::Folder,
+        hash_files: true,
+    };
+
+    let cancel_ref = if cancel_token.is_null() {
+        None
+    } else {
+        Some(&(*cancel_token).token)
+    };
+
+    let result = scan_to_sqlite_with_progress(&cfg, &store, cancel_ref, |progress| {
+        if let Some(cb) = progress_cb {
+            let path = progress.current_path.to_string_lossy();
+            let c_path = CString::new(path.as_ref()).unwrap_or_else(|_| CString::new("").unwrap());
+            let payload = DupdupProgress {
+                files_seen: progress.files_seen,
+                files_hashed: progress.files_hashed,
+                files_skipped: progress.files_skipped,
+                bytes_seen: progress.bytes_seen,
+                current_path: c_path.as_ptr(),
+            };
+            cb(&payload, user_data);
+        }
+    });
+
+    match result {
         Ok(_) => DupdupStatus::Ok,
         Err(e) => {
             set_last_error(e.to_string());

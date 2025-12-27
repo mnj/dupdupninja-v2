@@ -4,6 +4,8 @@ fn main() {
     use gtk4 as gtk;
     use gtk::gio;
     use gtk::glib;
+    use std::cell::RefCell;
+    use std::rc::Rc;
     const APP_ID: &str = "com.dupdupninja.app";
 
     if let Err(err) = adw::init() {
@@ -11,6 +13,7 @@ fn main() {
     }
 
     let app = adw::Application::new(Some(APP_ID), gio::ApplicationFlags::empty());
+    let ui_state: Rc<RefCell<Option<UiState>>> = Rc::new(RefCell::new(None));
 
     let quit = gio::SimpleAction::new("quit", None);
     quit.connect_activate(glib::clone!(
@@ -25,15 +28,18 @@ fn main() {
     scan_folder.connect_activate(glib::clone!(
         #[weak]
         app,
+        #[strong]
+        ui_state,
         move |_, _| {
             if let Some(window) = app.active_window() {
+                let ui_state = ui_state.clone();
                 glib::MainContext::ref_thread_default().spawn_local(async move {
                     let dialog = gtk::FileDialog::new();
                     dialog.set_title("Select a folder to scan");
                     match dialog.select_folder_future(Some(&window)).await {
                         Ok(folder) => {
                             if let Some(path) = folder.path() {
-                                println!("scan folder: {}", path.to_string_lossy());
+                                start_scan(ui_state.clone(), path, dupdupninja_core::ScanRootKind::Folder);
                             }
                         }
                         Err(err) => {
@@ -50,21 +56,15 @@ fn main() {
     scan_disk.connect_activate(glib::clone!(
         #[weak]
         app,
+        #[strong]
+        ui_state,
         move |_, _| {
             if let Some(window) = app.active_window() {
+                let ui_state = ui_state.clone();
                 select_mount_path(&window, move |path| {
+                    let ui_state = ui_state.clone();
                     if let Some(path) = path {
-                        println!("scan disk path: {}", path.to_string_lossy());
-                        match dupdupninja_core::drive::probe_for_path(&path) {
-                            Ok(meta) => {
-                                println!("disk id: {:?}", meta.id);
-                                println!("disk label: {:?}", meta.label);
-                                println!("disk fs_type: {:?}", meta.fs_type);
-                            }
-                            Err(err) => {
-                                eprintln!("disk metadata error: {err}");
-                            }
-                        }
+                        start_scan(ui_state.clone(), path, dupdupninja_core::ScanRootKind::Drive);
                     }
                 });
             }
@@ -165,17 +165,186 @@ fn main() {
         progress.set_fraction(0.0);
         progress.set_show_text(true);
         progress.set_text(Some("Idle"));
+        let cancel_button = gtk::Button::with_label("Cancel");
+        cancel_button.set_sensitive(false);
         status_bar.append(&status_label);
         status_bar.append(&progress);
+        status_bar.append(&cancel_button);
 
         toolbar.add_bottom_bar(&status_bar);
         window.set_content(Some(&toolbar));
+
+        let (update_tx, update_rx) = std::sync::mpsc::channel::<UiUpdate>();
+        *ui_state.borrow_mut() = Some(UiState {
+            status_label: status_label.clone(),
+            progress: progress.clone(),
+            cancel_button: cancel_button.clone(),
+            cancel_token: None,
+            update_tx: update_tx.clone(),
+        });
+
+        let ui_state_for_cancel = ui_state.clone();
+        cancel_button.connect_clicked(move |_| {
+            if let Some(state) = ui_state_for_cancel.borrow().as_ref() {
+                if let Some(token) = state.cancel_token.as_ref() {
+                    token.cancel();
+                }
+            }
+        });
+
+        let ui_state_for_updates = ui_state.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
+            while let Ok(update) = update_rx.try_recv() {
+                if let Some(state) = ui_state_for_updates.borrow_mut().as_mut() {
+                    match update {
+                        UiUpdate::Progress { text } => {
+                            state.status_label.set_text(&text);
+                            state.progress.set_text(Some("Scanning..."));
+                            state.progress.pulse();
+                        }
+                        UiUpdate::Done { text } => {
+                            state.status_label.set_text(&text);
+                            state.progress.set_text(Some("Idle"));
+                            state.progress.set_fraction(0.0);
+                            state.cancel_button.set_sensitive(false);
+                            state.cancel_token = None;
+                        }
+                        UiUpdate::Error { text } => {
+                            state.status_label.set_text(&text);
+                            state.progress.set_text(Some("Idle"));
+                            state.progress.set_fraction(0.0);
+                            state.cancel_button.set_sensitive(false);
+                            state.cancel_token = None;
+                        }
+                    }
+                }
+            }
+            glib::ControlFlow::Continue
+        });
 
         window.present();
         window.maximize();
     });
 
     app.run();
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+struct UiState {
+    status_label: gtk4::Label,
+    progress: gtk4::ProgressBar,
+    cancel_button: gtk4::Button,
+    cancel_token: Option<dupdupninja_core::scan::ScanCancelToken>,
+    update_tx: std::sync::mpsc::Sender<UiUpdate>,
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+enum UiUpdate {
+    Progress { text: String },
+    Done { text: String },
+    Error { text: String },
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn start_scan(
+    ui_state: std::rc::Rc<std::cell::RefCell<Option<UiState>>>,
+    root: std::path::PathBuf,
+    root_kind: dupdupninja_core::ScanRootKind,
+) {
+    use gtk4::prelude::WidgetExt;
+    let (status_label, progress, cancel_button, update_tx) = {
+        let state = ui_state.borrow();
+        let Some(state) = state.as_ref() else {
+            return;
+        };
+        (
+            state.status_label.clone(),
+            state.progress.clone(),
+            state.cancel_button.clone(),
+            state.update_tx.clone(),
+        )
+    };
+
+    let cancel_token = dupdupninja_core::scan::ScanCancelToken::new();
+    {
+        let mut state = ui_state.borrow_mut();
+        if let Some(state) = state.as_mut() {
+            state.cancel_token = Some(cancel_token.clone());
+        }
+    }
+
+    status_label.set_text("Status: Scanning...");
+    progress.set_text(Some("Scanning..."));
+    progress.pulse();
+    cancel_button.set_sensitive(true);
+
+    std::thread::spawn(move || {
+        let db_path = scan_db_path();
+        let store = match dupdupninja_core::db::SqliteScanStore::open(&db_path) {
+            Ok(store) => store,
+            Err(err) => {
+                let msg = format!("Status: DB error: {err}");
+                let _ = update_tx.send(UiUpdate::Error { text: msg });
+                return;
+            }
+        };
+
+        let cfg = dupdupninja_core::scan::ScanConfig {
+            root: root.clone(),
+            root_kind,
+            hash_files: true,
+        };
+
+        let result = dupdupninja_core::scan::scan_to_sqlite_with_progress(
+            &cfg,
+            &store,
+            Some(&cancel_token),
+            |progress_update| {
+                let path = progress_update
+                    .current_path
+                    .file_name()
+                    .and_then(|p| p.to_str())
+                    .unwrap_or("file");
+                let text = format!(
+                    "Status: Scanning {} ({} files, {} hashed, {} skipped)",
+                    path,
+                    progress_update.files_seen,
+                    progress_update.files_hashed,
+                    progress_update.files_skipped
+                );
+                let _ = update_tx.send(UiUpdate::Progress { text });
+            },
+        );
+
+        let update = match result {
+            Ok(result) => UiUpdate::Done {
+                text: format!(
+                    "Status: Scan complete ({} files, {} hashed, {} skipped)",
+                    result.stats.files_seen,
+                    result.stats.files_hashed,
+                    result.stats.files_skipped
+                ),
+            },
+            Err(dupdupninja_core::Error::Cancelled) => UiUpdate::Done {
+                text: "Status: Scan cancelled".to_string(),
+            },
+            Err(err) => UiUpdate::Error {
+                text: format!("Status: Scan error: {err}"),
+            },
+        };
+        let _ = update_tx.send(update);
+    });
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn scan_db_path() -> std::path::PathBuf {
+    let mut path = std::env::temp_dir();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    path.push(format!("dupdupninja-scan-{ts}.sqlite3"));
+    path
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]

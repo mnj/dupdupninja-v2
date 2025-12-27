@@ -1,4 +1,8 @@
 use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::SystemTime;
 
 use uuid::Uuid;
@@ -27,6 +31,48 @@ impl ScanConfig {
 }
 
 pub fn scan_to_sqlite(config: &ScanConfig, store: &SqliteScanStore) -> Result<ScanResult> {
+    scan_to_sqlite_with_progress(config, store, None, |_| {})
+}
+
+#[derive(Clone, Debug)]
+pub struct ScanCancelToken {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl ScanCancelToken {
+    pub fn new() -> Self {
+        Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ScanProgress {
+    pub files_seen: u64,
+    pub files_hashed: u64,
+    pub files_skipped: u64,
+    pub bytes_seen: u64,
+    pub current_path: PathBuf,
+}
+
+pub fn scan_to_sqlite_with_progress<F>(
+    config: &ScanConfig,
+    store: &SqliteScanStore,
+    cancel: Option<&ScanCancelToken>,
+    mut on_progress: F,
+) -> Result<ScanResult>
+where
+    F: FnMut(&ScanProgress),
+{
     if !config.root.exists() {
         return Err(Error::InvalidArgument(format!(
             "root does not exist: {}",
@@ -49,7 +95,14 @@ pub fn scan_to_sqlite(config: &ScanConfig, store: &SqliteScanStore) -> Result<Sc
     store.insert_scan(&meta)?;
 
     let mut stats = ScanStats::default();
+    let mut bytes_seen = 0u64;
     for entry in WalkDir::new(&config.root).follow_links(false).into_iter() {
+        if let Some(cancel) = cancel {
+            if cancel.is_cancelled() {
+                return Err(Error::Cancelled);
+            }
+        }
+
         let entry = match entry {
             Ok(v) => v,
             Err(_) => {
@@ -72,6 +125,7 @@ pub fn scan_to_sqlite(config: &ScanConfig, store: &SqliteScanStore) -> Result<Sc
             }
         };
 
+        bytes_seen = bytes_seen.saturating_add(md.len());
         let mut rec = MediaFileRecord {
             scan_id,
             path: relative_to_root(&config.root, &path).unwrap_or(path.clone()),
@@ -93,6 +147,14 @@ pub fn scan_to_sqlite(config: &ScanConfig, store: &SqliteScanStore) -> Result<Sc
         }
 
         store.upsert_file(&rec)?;
+
+        on_progress(&ScanProgress {
+            files_seen: stats.files_seen,
+            files_hashed: stats.files_hashed,
+            files_skipped: stats.files_skipped,
+            bytes_seen,
+            current_path: path,
+        });
     }
 
     Ok(ScanResult { scan_id, stats })
@@ -101,4 +163,3 @@ pub fn scan_to_sqlite(config: &ScanConfig, store: &SqliteScanStore) -> Result<Sc
 fn relative_to_root(root: &Path, path: &Path) -> Option<PathBuf> {
     path.strip_prefix(root).ok().map(|p| p.to_path_buf())
 }
-

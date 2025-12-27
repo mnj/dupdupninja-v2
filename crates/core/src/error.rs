@@ -12,5 +12,7 @@ pub enum Error {
 
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
-}
 
+    #[error("scan cancelled")]
+    Cancelled,
+}
