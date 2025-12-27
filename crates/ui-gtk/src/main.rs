@@ -53,26 +53,17 @@ fn main() {
         move |_, _| {
             if let Some(window) = app.active_window() {
                 glib::MainContext::ref_thread_default().spawn_local(async move {
-                    let dialog = gtk::FileDialog::new();
-                    dialog.set_title("Select a disk/mount to scan");
-                    match dialog.select_folder_future(Some(&window)).await {
-                        Ok(folder) => {
-                            if let Some(path) = folder.path() {
-                                println!("scan disk path: {}", path.to_string_lossy());
-                                match dupdupninja_core::drive::probe_for_path(&path) {
-                                    Ok(meta) => {
-                                        println!("disk id: {:?}", meta.id);
-                                        println!("disk label: {:?}", meta.label);
-                                        println!("disk fs_type: {:?}", meta.fs_type);
-                                    }
-                                    Err(err) => {
-                                        eprintln!("disk metadata error: {err}");
-                                    }
-                                }
+                    if let Some(path) = select_mount_path(&window).await {
+                        println!("scan disk path: {}", path.to_string_lossy());
+                        match dupdupninja_core::drive::probe_for_path(&path) {
+                            Ok(meta) => {
+                                println!("disk id: {:?}", meta.id);
+                                println!("disk label: {:?}", meta.label);
+                                println!("disk fs_type: {:?}", meta.fs_type);
                             }
-                        }
-                        Err(err) => {
-                            eprintln!("disk selection error: {err}");
+                            Err(err) => {
+                                eprintln!("disk metadata error: {err}");
+                            }
                         }
                     }
                 });
@@ -140,6 +131,16 @@ fn main() {
         window.set_default_size(1100, 720);
 
         let header = adw::HeaderBar::new();
+        let new_scan_menu = gio::Menu::new();
+        new_scan_menu.append(Some("Scan Folder…"), Some("app.scan_folder"));
+        new_scan_menu.append(Some("Scan Disk…"), Some("app.scan_disk"));
+        let new_scan_button = gtk::MenuButton::new();
+        new_scan_button.set_icon_name("list-add-symbolic");
+        new_scan_button.set_tooltip_text(Some("New scan/fileset"));
+        let new_scan_popover = gtk::PopoverMenu::from_model(Some(&new_scan_menu));
+        new_scan_button.set_popover(Some(&new_scan_popover));
+        header.pack_start(&new_scan_button);
+
         let menu_button = gtk::MenuButton::new();
         menu_button.set_icon_name("open-menu-symbolic");
         let popover = gtk::PopoverMenu::from_model(Some(&app_menu));
@@ -157,6 +158,72 @@ fn main() {
     });
 
     app.run();
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+async fn select_mount_path(window: &gtk4::Window) -> Option<std::path::PathBuf> {
+    use gtk4 as gtk;
+    use gtk::gio;
+    use gtk::prelude::*;
+
+    let dialog = gtk::Dialog::builder()
+        .title("Select a disk/mount to scan")
+        .transient_for(window)
+        .modal(true)
+        .default_width(520)
+        .default_height(360)
+        .build();
+    dialog.add_button("Cancel", gtk::ResponseType::Cancel);
+    dialog.add_button("Select", gtk::ResponseType::Accept);
+
+    let content = dialog.content_area();
+    content.set_margin_top(12);
+    content.set_margin_bottom(12);
+    content.set_margin_start(12);
+    content.set_margin_end(12);
+    content.set_spacing(8);
+
+    let list = gtk::ListBox::new();
+    list.set_selection_mode(gtk::SelectionMode::Single);
+    list.add_css_class("boxed-list");
+    content.append(&list);
+
+    let monitor = gio::VolumeMonitor::get();
+    for mount in monitor.mounts() {
+        let root = mount.root();
+        let path = match root.path() {
+            Some(path) => path,
+            None => continue,
+        };
+        let label = format!("{}  ({})", mount.name(), path.display());
+        let row = gtk::ListBoxRow::new();
+        let text = gtk::Label::new(Some(&label));
+        text.set_xalign(0.0);
+        text.set_margin_top(6);
+        text.set_margin_bottom(6);
+        text.set_margin_start(10);
+        text.set_margin_end(10);
+        row.set_child(Some(&text));
+        row.set_activatable(true);
+        row.set_selectable(true);
+        unsafe {
+            row.set_data("mount-path", path);
+        }
+        list.append(&row);
+    }
+
+    let response = dialog.run_future().await;
+    let selection = if response == gtk::ResponseType::Accept {
+        list.selected_row().and_then(|row| unsafe {
+            row.data::<std::path::PathBuf>("mount-path")
+                .map(|p| p.as_ref().clone())
+        })
+    } else {
+        None
+    };
+
+    dialog.close();
+    selection
 }
 
 #[cfg(not(all(target_os = "linux", feature = "gtk")))]
