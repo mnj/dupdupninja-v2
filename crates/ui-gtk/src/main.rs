@@ -134,23 +134,103 @@ fn main() {
     settings.connect_activate(glib::clone!(
         #[weak]
         app,
+        #[strong]
+        ui_state,
         move |_, _| {
             if let Some(window) = app.active_window() {
+                let (initial_capture, initial_count) = ui_state
+                    .borrow()
+                    .as_ref()
+                    .map(|s| (s.capture_snapshots, s.snapshots_per_video))
+                    .unwrap_or((true, 3));
+
                 let settings_window = gtk::Window::builder()
                     .transient_for(&window)
                     .title("Settings")
                     .default_width(520)
-                    .default_height(360)
+                    .default_height(240)
                     .modal(true)
                     .build();
+
                 let content = gtk::Box::new(gtk::Orientation::Vertical, 12);
                 content.set_margin_top(18);
                 content.set_margin_bottom(18);
                 content.set_margin_start(18);
                 content.set_margin_end(18);
-                content.append(&gtk::Label::new(Some(
-                    "Settings are not implemented yet.",
-                )));
+
+                let title = gtk::Label::new(Some("Scanning"));
+                title.add_css_class("title-3");
+                title.set_xalign(0.0);
+                content.append(&title);
+
+                let row1 = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+                row1.set_hexpand(true);
+                let label1 = gtk::Label::new(Some("Capture video snapshots"));
+                label1.set_xalign(0.0);
+                label1.set_hexpand(true);
+                let capture_switch = gtk::Switch::builder().active(initial_capture).build();
+                row1.append(&label1);
+                row1.append(&capture_switch);
+                content.append(&row1);
+
+                let row2 = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+                row2.set_hexpand(true);
+                let label2 = gtk::Label::new(Some("Snapshots per video"));
+                label2.set_xalign(0.0);
+                label2.set_hexpand(true);
+                let adjustment = gtk::Adjustment::new(
+                    initial_count.clamp(1, 10) as f64,
+                    1.0,
+                    10.0,
+                    1.0,
+                    1.0,
+                    0.0,
+                );
+                let snapshots_spin = gtk::SpinButton::new(Some(&adjustment), 1.0, 0);
+                snapshots_spin.set_sensitive(initial_capture);
+                row2.append(&label2);
+                row2.append(&snapshots_spin);
+                content.append(&row2);
+
+                capture_switch.connect_notify_local(
+                    Some("active"),
+                    glib::clone!(
+                        #[strong]
+                        ui_state,
+                        #[weak]
+                        snapshots_spin,
+                        move |sw, _| {
+                            let active = sw.is_active();
+                            if let Some(state) = ui_state.borrow_mut().as_mut() {
+                                state.capture_snapshots = active;
+                            }
+                            snapshots_spin.set_sensitive(active);
+                        }
+                    ),
+                );
+
+                snapshots_spin.connect_value_changed(glib::clone!(
+                    #[strong]
+                    ui_state,
+                    move |spin| {
+                        let value = spin.value().round().clamp(1.0, 10.0) as u32;
+                        if let Some(state) = ui_state.borrow_mut().as_mut() {
+                            state.snapshots_per_video = value;
+                        }
+                    }
+                ));
+
+                let close_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+                close_row.set_halign(gtk::Align::End);
+                let close_button = gtk::Button::with_label("Close");
+                close_button.connect_clicked(glib::clone!(
+                    #[weak]
+                    settings_window,
+                    move |_| settings_window.close()
+                ));
+                close_row.append(&close_button);
+                content.append(&close_row);
+
                 settings_window.set_child(Some(&content));
                 settings_window.present();
             }
@@ -299,6 +379,8 @@ fn main() {
             fileset_placeholder: placeholder.clone(),
             active_scan_fileset_id: None,
             scan_actions_enabled: true,
+            capture_snapshots: true,
+            snapshots_per_video: 3,
         });
 
         restore_open_filesets(ui_state_for_activate.clone());
@@ -449,6 +531,8 @@ struct UiState {
     fileset_placeholder: gtk4::Label,
     active_scan_fileset_id: Option<u64>,
     scan_actions_enabled: bool,
+    capture_snapshots: bool,
+    snapshots_per_video: u32,
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]
@@ -470,7 +554,7 @@ fn start_scan(
     fileset_id: u64,
 ) {
     use gtk4::prelude::WidgetExt;
-    let (status_label, progress, cancel_button, update_tx) = {
+    let (status_label, progress, cancel_button, update_tx, capture_snapshots, snapshots_per_video) = {
         let state = ui_state.borrow();
         let Some(state) = state.as_ref() else {
             return;
@@ -480,6 +564,8 @@ fn start_scan(
             state.progress.clone(),
             state.cancel_button.clone(),
             state.update_tx.clone(),
+            state.capture_snapshots,
+            state.snapshots_per_video,
         )
     };
 
@@ -514,8 +600,8 @@ fn start_scan(
             root: root.clone(),
             root_kind,
             hash_files: true,
-            capture_snapshots: true,
-            snapshots_per_video: 3,
+            capture_snapshots,
+            snapshots_per_video,
         };
 
     let prescan_result = dupdupninja_core::scan::prescan(&cfg, Some(&cancel_token), |progress| {
