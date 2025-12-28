@@ -167,6 +167,8 @@ where
             size_bytes: md.len(),
             modified_at: md.modified().ok(),
             blake3: None,
+            sha256: None,
+            ffmpeg_metadata: None,
         };
 
         if config.hash_files {

@@ -21,6 +21,8 @@ pub struct MediaFileRecord {
     pub size_bytes: u64,
     pub modified_at: Option<SystemTime>,
     pub blake3: Option<[u8; 32]>,
+    pub sha256: Option<[u8; 32]>,
+    pub ffmpeg_metadata: Option<String>,
 }
 
 #[derive(Debug, Clone)]
