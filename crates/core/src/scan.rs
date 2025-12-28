@@ -11,6 +11,10 @@ use crate::db::SqliteScanStore;
 use crate::error::{Error, Result};
 use crate::drive;
 use crate::hash::{blake3_file, sha256_file};
+use std::io::Read;
+use std::process::{Command, Stdio};
+use std::time::Duration;
+use wait_timeout::ChildExt;
 use crate::models::{DriveMetadata, FilesetMetadata, MediaFileRecord, ScanResult, ScanRootKind, ScanStats};
 
 #[derive(Debug, Clone)]
@@ -178,6 +182,8 @@ where
             Err(_) => None,
         };
 
+        rec.ffmpeg_metadata = ffprobe_metadata(&path);
+
         if config.hash_files {
             match blake3_file(&path) {
                 Ok(hash) => {
@@ -213,6 +219,50 @@ where
 
     update_fileset_status(store, config, "completed");
     Ok(ScanResult { stats })
+}
+
+fn ffprobe_metadata(path: &Path) -> Option<String> {
+    let mut child = Command::new("ffprobe")
+        .arg("-v")
+        .arg("error")
+        .arg("-print_format")
+        .arg("json")
+        .arg("-show_format")
+        .arg("-show_streams")
+        .arg("--")
+        .arg(path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+
+    let mut stdout = child.stdout.take()?;
+    let mut stderr = child.stderr.take()?;
+    let timeout = Duration::from_secs(30);
+
+    match child.wait_timeout(timeout).ok()? {
+        Some(status) => {
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let _ = stdout.read_to_end(&mut out);
+            let _ = stderr.read_to_end(&mut err);
+            if !status.success() {
+                return None;
+            }
+            let text = String::from_utf8(out).ok()?;
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -10,4 +10,5 @@ infer = "0.16"
 rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "0.10"
 thiserror = "2"
+wait-timeout = "0.2"
 walkdir = "2"
