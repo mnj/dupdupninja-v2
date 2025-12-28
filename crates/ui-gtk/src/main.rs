@@ -197,19 +197,27 @@ fn main() {
                 let label3 = gtk::Label::new(Some("Snapshot max size"));
                 label3.set_xalign(0.0);
                 label3.set_hexpand(true);
-                let size_combo = gtk::ComboBoxText::new();
-                for size in [128_u32, 256, 512, 768, 1024, 1536, 2048] {
-                    size_combo.append_text(&format!("{size} x {size}"));
-                }
                 let sizes = [128_u32, 256, 512, 768, 1024, 1536, 2048];
+                let size_labels = [
+                    "128 x 128",
+                    "256 x 256",
+                    "512 x 512",
+                    "768 x 768",
+                    "1024 x 1024",
+                    "1536 x 1536",
+                    "2048 x 2048",
+                ];
+                let string_list = gtk::StringList::new(&size_labels);
+                let size_dropdown =
+                    gtk::DropDown::new(Some(string_list.clone()), None::<&gtk::Expression>);
                 let selected = sizes
                     .iter()
                     .position(|v| *v == initial_max_dim)
                     .unwrap_or(4);
-                size_combo.set_active(Some(selected as u32));
-                size_combo.set_sensitive(initial_capture);
+                size_dropdown.set_selected(selected as u32);
+                size_dropdown.set_sensitive(initial_capture);
                 row3.append(&label3);
-                row3.append(&size_combo);
+                row3.append(&size_dropdown);
                 content.append(&row3);
 
                 capture_switch.connect_notify_local(
@@ -220,14 +228,14 @@ fn main() {
                         #[weak]
                         snapshots_spin,
                         #[weak]
-                        size_combo,
+                        size_dropdown,
                         move |sw, _| {
                             let active = sw.is_active();
                             if let Some(state) = ui_state.borrow_mut().as_mut() {
                                 state.capture_snapshots = active;
                             }
                             snapshots_spin.set_sensitive(active);
-                            size_combo.set_sensitive(active);
+                            size_dropdown.set_sensitive(active);
                         }
                     ),
                 );
@@ -243,11 +251,11 @@ fn main() {
                     }
                 ));
 
-                size_combo.connect_changed(glib::clone!(
+                size_dropdown.connect_selected_notify(glib::clone!(
                     #[strong]
                     ui_state,
                     move |combo| {
-                        let idx = combo.active().unwrap_or(4) as usize;
+                        let idx = combo.selected() as usize;
                         let sizes = [128_u32, 256, 512, 768, 1024, 1536, 2048];
                         if let Some(state) = ui_state.borrow_mut().as_mut() {
                             state.snapshot_max_dim = sizes[idx];
