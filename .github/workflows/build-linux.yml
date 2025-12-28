@@ -20,8 +20,10 @@ jobs:
         include:
           - arch: amd64
             target: x86_64-unknown-linux-gnu
+            appimage_arch: x86_64
           - arch: arm64
             target: aarch64-unknown-linux-gnu
+            appimage_arch: aarch64
     steps:
       - uses: actions/checkout@v4
 
@@ -70,12 +72,51 @@ jobs:
           fi
           cargo build -p dupdupninja-ui-gtk --features gtk --release --target ${{ matrix.target }}
 
+      - name: Build AppImage (optional)
+        id: appimage
+        continue-on-error: true
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            appstream \
+            desktop-file-utils \
+            file \
+            libglib2.0-bin \
+            patchelf \
+            squashfs-tools
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            apt-get install -y --no-install-recommends qemu-user-static binfmt-support
+            update-binfmts --enable qemu-aarch64 || true
+          fi
+
+          mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/512x512/apps
+          cp target/${{ matrix.target }}/release/dupdupninja-ui-gtk AppDir/usr/bin/dupdupninja-ui-gtk
+          cp packaging/linux/dupdupninja.desktop AppDir/usr/share/applications/dupdupninja.desktop
+          cp icons/linux/dupdupninja-512.png AppDir/usr/share/icons/hicolor/512x512/apps/dupdupninja.png
+
+          curl -sSfL https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${{ matrix.appimage_arch }}.AppImage -o linuxdeploy.AppImage
+          curl -sSfL https://github.com/linuxdeploy/linuxdeploy-plugin-gtk/releases/download/continuous/linuxdeploy-plugin-gtk-${{ matrix.appimage_arch }}.AppImage -o linuxdeploy-plugin-gtk.AppImage
+          chmod +x linuxdeploy.AppImage linuxdeploy-plugin-gtk.AppImage
+
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          ./linuxdeploy.AppImage --appdir AppDir -d packaging/linux/dupdupninja.desktop -i icons/linux/dupdupninja-512.png --plugin gtk --output appimage
+          if ls ./*.AppImage >/dev/null 2>&1; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Package artifact
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/dupdupninja dist/dupdupninja
           cp target/${{ matrix.target }}/release/dupdupninja-ui-gtk dist/dupdupninja-ui-gtk
           tar -czf dupdupninja-linux-${{ matrix.arch }}.tar.gz -C dist dupdupninja dupdupninja-ui-gtk
+
+      - name: Upload AppImage (optional)
+        if: steps.appimage.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dupdupninja-linux-${{ matrix.arch }}-appimage
+          path: "*.AppImage"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
