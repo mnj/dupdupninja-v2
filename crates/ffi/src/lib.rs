@@ -208,6 +208,7 @@ pub unsafe extern "C" fn dupdupninja_scan_folder_to_sqlite(
         hash_files: true,
         capture_snapshots: true,
         snapshots_per_video: 3,
+        snapshot_max_dim: 1024,
     };
 
     match scan_to_sqlite(&cfg, &store) {
@@ -272,6 +273,7 @@ pub unsafe extern "C" fn dupdupninja_scan_folder_to_sqlite_with_progress(
         hash_files: true,
         capture_snapshots: true,
         snapshots_per_video: 3,
+        snapshot_max_dim: 1024,
     };
 
     let cancel_ref = if cancel_token.is_null() {
@@ -339,6 +341,7 @@ pub unsafe extern "C" fn dupdupninja_prescan_folder(
         hash_files: false,
         capture_snapshots: true,
         snapshots_per_video: 3,
+        snapshot_max_dim: 1024,
     };
 
     let cancel_ref = if cancel_token.is_null() {
@@ -431,6 +434,7 @@ pub unsafe extern "C" fn dupdupninja_scan_folder_to_sqlite_with_progress_and_tot
         hash_files: true,
         capture_snapshots: true,
         snapshots_per_video: 3,
+        snapshot_max_dim: 1024,
     };
 
     let cancel_ref = if cancel_token.is_null() {

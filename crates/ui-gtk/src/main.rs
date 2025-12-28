@@ -138,11 +138,11 @@ fn main() {
         ui_state,
         move |_, _| {
             if let Some(window) = app.active_window() {
-                let (initial_capture, initial_count) = ui_state
+                let (initial_capture, initial_count, initial_max_dim) = ui_state
                     .borrow()
                     .as_ref()
-                    .map(|s| (s.capture_snapshots, s.snapshots_per_video))
-                    .unwrap_or((true, 3));
+                    .map(|s| (s.capture_snapshots, s.snapshots_per_video, s.snapshot_max_dim))
+                    .unwrap_or((true, 3, 1024));
 
                 let settings_window = gtk::Window::builder()
                     .transient_for(&window)
@@ -192,6 +192,26 @@ fn main() {
                 row2.append(&snapshots_spin);
                 content.append(&row2);
 
+                let row3 = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+                row3.set_hexpand(true);
+                let label3 = gtk::Label::new(Some("Snapshot max size"));
+                label3.set_xalign(0.0);
+                label3.set_hexpand(true);
+                let size_combo = gtk::ComboBoxText::new();
+                for size in [128_u32, 256, 512, 768, 1024, 1536, 2048] {
+                    size_combo.append_text(&format!("{size} x {size}"));
+                }
+                let sizes = [128_u32, 256, 512, 768, 1024, 1536, 2048];
+                let selected = sizes
+                    .iter()
+                    .position(|v| *v == initial_max_dim)
+                    .unwrap_or(4);
+                size_combo.set_active(Some(selected as u32));
+                size_combo.set_sensitive(initial_capture);
+                row3.append(&label3);
+                row3.append(&size_combo);
+                content.append(&row3);
+
                 capture_switch.connect_notify_local(
                     Some("active"),
                     glib::clone!(
@@ -199,12 +219,15 @@ fn main() {
                         ui_state,
                         #[weak]
                         snapshots_spin,
+                        #[weak]
+                        size_combo,
                         move |sw, _| {
                             let active = sw.is_active();
                             if let Some(state) = ui_state.borrow_mut().as_mut() {
                                 state.capture_snapshots = active;
                             }
                             snapshots_spin.set_sensitive(active);
+                            size_combo.set_sensitive(active);
                         }
                     ),
                 );
@@ -216,6 +239,18 @@ fn main() {
                         let value = spin.value().round().clamp(1.0, 10.0) as u32;
                         if let Some(state) = ui_state.borrow_mut().as_mut() {
                             state.snapshots_per_video = value;
+                        }
+                    }
+                ));
+
+                size_combo.connect_changed(glib::clone!(
+                    #[strong]
+                    ui_state,
+                    move |combo| {
+                        let idx = combo.active().unwrap_or(4) as usize;
+                        let sizes = [128_u32, 256, 512, 768, 1024, 1536, 2048];
+                        if let Some(state) = ui_state.borrow_mut().as_mut() {
+                            state.snapshot_max_dim = sizes[idx];
                         }
                     }
                 ));
@@ -381,6 +416,7 @@ fn main() {
             scan_actions_enabled: true,
             capture_snapshots: true,
             snapshots_per_video: 3,
+            snapshot_max_dim: 1024,
         });
 
         restore_open_filesets(ui_state_for_activate.clone());
@@ -533,6 +569,7 @@ struct UiState {
     scan_actions_enabled: bool,
     capture_snapshots: bool,
     snapshots_per_video: u32,
+    snapshot_max_dim: u32,
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]
@@ -554,7 +591,15 @@ fn start_scan(
     fileset_id: u64,
 ) {
     use gtk4::prelude::WidgetExt;
-    let (status_label, progress, cancel_button, update_tx, capture_snapshots, snapshots_per_video) = {
+    let (
+        status_label,
+        progress,
+        cancel_button,
+        update_tx,
+        capture_snapshots,
+        snapshots_per_video,
+        snapshot_max_dim,
+    ) = {
         let state = ui_state.borrow();
         let Some(state) = state.as_ref() else {
             return;
@@ -566,6 +611,7 @@ fn start_scan(
             state.update_tx.clone(),
             state.capture_snapshots,
             state.snapshots_per_video,
+            state.snapshot_max_dim,
         )
     };
 
@@ -602,6 +648,7 @@ fn start_scan(
             hash_files: true,
             capture_snapshots,
             snapshots_per_video,
+            snapshot_max_dim,
         };
 
     let prescan_result = dupdupninja_core::scan::prescan(&cfg, Some(&cancel_token), |progress| {

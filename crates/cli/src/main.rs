@@ -56,6 +56,7 @@ fn real_main() -> dupdupninja_core::Result<()> {
                 hash_files: true,
                 capture_snapshots: true,
                 snapshots_per_video: 3,
+                snapshot_max_dim: 1024,
             };
             let res = scan_to_sqlite(&cfg, &store)?;
 

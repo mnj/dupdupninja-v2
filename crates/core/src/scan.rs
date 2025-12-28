@@ -29,6 +29,7 @@ pub struct ScanConfig {
     pub hash_files: bool,
     pub capture_snapshots: bool,
     pub snapshots_per_video: u32,
+    pub snapshot_max_dim: u32,
 }
 
 impl ScanConfig {
@@ -39,6 +40,7 @@ impl ScanConfig {
             hash_files: true,
             capture_snapshots: true,
             snapshots_per_video: 3,
+            snapshot_max_dim: 1024,
         }
     }
 }
@@ -228,6 +230,7 @@ where
                     &path,
                     duration_ms,
                     config.snapshots_per_video,
+                    config.snapshot_max_dim,
                     Duration::from_secs(30),
                 );
                 if let Some(snaps) = snapshots {
@@ -340,6 +343,7 @@ fn video_snapshots_for_file(
     path: &Path,
     duration_ms: Option<i64>,
     snapshots_per_video: u32,
+    snapshot_max_dim: u32,
     timeout: Duration,
 ) -> Option<Vec<FileSnapshotRecord>> {
     let duration_ms = duration_ms?;
@@ -349,7 +353,13 @@ fn video_snapshots_for_file(
     let inner_timeout = timeout.saturating_sub(Duration::from_secs(2));
     thread::spawn(move || {
         let result = std::panic::catch_unwind(|| {
-            video_snapshots_for_file_inner(&path, duration_ms, snapshots_per_video, inner_timeout)
+            video_snapshots_for_file_inner(
+                &path,
+                duration_ms,
+                snapshots_per_video,
+                snapshot_max_dim,
+                inner_timeout,
+            )
         })
         .ok()
         .flatten();
@@ -363,6 +373,7 @@ fn video_snapshots_for_file_inner(
     path: &Path,
     duration_ms: i64,
     snapshots_per_video: u32,
+    snapshot_max_dim: u32,
     timeout: Duration,
 ) -> Option<Vec<FileSnapshotRecord>> {
     if snapshots_per_video == 0 || duration_ms <= 0 {
@@ -388,7 +399,12 @@ fn video_snapshots_for_file_inner(
         }
 
         let per_snapshot_timeout = remaining.min(Duration::from_secs(10));
-        let image_avif = match ffmpeg_snapshot_avif_inner(path, at_secs, per_snapshot_timeout) {
+        let image_avif = match ffmpeg_snapshot_avif_inner(
+            path,
+            at_secs,
+            snapshot_max_dim,
+            per_snapshot_timeout,
+        ) {
             Some(bytes) => bytes,
             None => continue,
         };
@@ -405,7 +421,12 @@ fn video_snapshots_for_file_inner(
     Some(snaps)
 }
 
-fn ffmpeg_snapshot_avif_inner(path: &Path, at_secs: f64, timeout: Duration) -> Option<Vec<u8>> {
+fn ffmpeg_snapshot_avif_inner(
+    path: &Path,
+    at_secs: f64,
+    snapshot_max_dim: u32,
+    timeout: Duration,
+) -> Option<Vec<u8>> {
     let ts = format!("{at_secs:.3}");
     let mut out_path = std::env::temp_dir();
     let unique = format!(
@@ -417,6 +438,12 @@ fn ffmpeg_snapshot_avif_inner(path: &Path, at_secs: f64, timeout: Duration) -> O
             .as_nanos()
     );
     out_path.push(unique);
+
+    let max_dim = snapshot_max_dim.max(1);
+    let scale_filter = format!(
+        "scale='min(iw,{0})':'min(ih,{0})':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2",
+        max_dim
+    );
 
     let mut child = Command::new("ffmpeg")
         .arg("-hide_banner")
@@ -435,7 +462,7 @@ fn ffmpeg_snapshot_avif_inner(path: &Path, at_secs: f64, timeout: Duration) -> O
         .arg("-sn")
         .arg("-dn")
         .arg("-vf")
-        .arg("scale='min(iw,1024)':'min(ih,1024)':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2")
+        .arg(scale_filter)
         .arg("-pix_fmt")
         .arg("yuv420p")
         .arg("-c:v")
