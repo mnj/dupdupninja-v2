@@ -1,8 +1,0 @@
-[Desktop Entry]
-Name=DupdupNinja
-Comment=Find duplicate and near-duplicate media
-Exec=dupdupninja-ui-gtk
-Icon=dupdupninja
-Terminal=false
-Type=Application
-Categories=Utility;GTK;
