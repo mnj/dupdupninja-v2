@@ -94,8 +94,8 @@ jobs:
           cp packaging/linux/dupdupninja.desktop AppDir/usr/share/applications/dupdupninja.desktop
           cp icons/linux/dupdupninja-512.png AppDir/usr/share/icons/hicolor/512x512/apps/dupdupninja.png
 
-          curl -sSfL https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${{ matrix.appimage_arch }}.AppImage -o linuxdeploy.AppImage
-          curl -sSfL https://github.com/linuxdeploy/linuxdeploy-plugin-gtk/releases/download/continuous/linuxdeploy-plugin-gtk-${{ matrix.appimage_arch }}.AppImage -o linuxdeploy-plugin-gtk.AppImage
+          curl -sSfL https://github.com/linuxdeploy/linuxdeploy/releases/latest/download/linuxdeploy-${{ matrix.appimage_arch }}.AppImage -o linuxdeploy.AppImage
+          curl -sSfL https://github.com/linuxdeploy/linuxdeploy-plugin-gtk/releases/latest/download/linuxdeploy-plugin-gtk-${{ matrix.appimage_arch }}.AppImage -o linuxdeploy-plugin-gtk.AppImage
           chmod +x linuxdeploy.AppImage linuxdeploy-plugin-gtk.AppImage
 
           export APPIMAGE_EXTRACT_AND_RUN=1
