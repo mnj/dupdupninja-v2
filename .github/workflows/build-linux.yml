@@ -98,7 +98,7 @@ jobs:
           cp packaging/linux/dupdupninja.desktop AppDir/usr/share/applications/dupdupninja.desktop
           cp icons/linux/dupdupninja-512.png AppDir/usr/share/icons/hicolor/512x512/apps/dupdupninja.png
 
-          APPIMAGE_VERSION="${GITHUB_SHA::7}"
+          APPIMAGE_VERSION="$(printf "%s" "$GITHUB_SHA" | cut -c1-7)"
           sed -e "s/@ARCH@/${{ matrix.appimage_arch }}/g" \
               -e "s/@DEB_ARCH@/${{ matrix.arch }}/g" \
               -e "s/@VERSION@/${APPIMAGE_VERSION}/g" \
