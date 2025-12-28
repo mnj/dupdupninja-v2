@@ -1,0 +1,58 @@
+name: Build macOS
+
+on:
+  push:
+  workflow_dispatch:
+
+concurrency:
+  group: build-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: macOS (${{ matrix.arch }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            target: aarch64-apple-darwin
+            swift_arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build CLI (Release)
+        run: cargo build -p dupdupninja-cli --release --target ${{ matrix.target }}
+
+      - name: Build FFI (Release)
+        run: cargo build -p dupdupninja-ffi --release --target ${{ matrix.target }}
+
+      - name: Build Swift package (Release)
+        run: |
+          cd macos/DupdupNinjaCore
+          swift build -c release --arch ${{ matrix.swift_arch }}
+
+      - name: Package artifact
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/dupdupninja dist/dupdupninja
+          if [ -f target/${{ matrix.target }}/release/libdupdupninja_ffi.dylib ]; then
+            cp target/${{ matrix.target }}/release/libdupdupninja_ffi.dylib dist/libdupdupninja_ffi.dylib
+          fi
+          if [ -f macos/DupdupNinjaCore/.build/release/DupdupNinjaApp ]; then
+            cp macos/DupdupNinjaCore/.build/release/DupdupNinjaApp dist/DupdupNinjaApp
+          fi
+          tar -czf dupdupninja-macos-${{ matrix.arch }}.tar.gz -C dist .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dupdupninja-macos-${{ matrix.arch }}
+          path: dupdupninja-macos-${{ matrix.arch }}.tar.gz

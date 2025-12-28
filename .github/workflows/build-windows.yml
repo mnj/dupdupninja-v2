@@ -1,0 +1,59 @@
+name: Build Windows
+
+on:
+  push:
+  workflow_dispatch:
+
+concurrency:
+  group: build-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Windows (${{ matrix.arch }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-pc-windows-msvc
+            rid: win-x64
+          - arch: arm64
+            target: aarch64-pc-windows-msvc
+            rid: win-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build CLI (Release)
+        run: cargo build -p dupdupninja-cli --release --target ${{ matrix.target }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Build WinUI (Release)
+        working-directory: windows/DupdupNinjaWinUI/DupdupNinjaWinUI
+        run: dotnet publish -c Release -r ${{ matrix.rid }} --self-contained false
+
+      - name: Package artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target\${{ matrix.target }}\release\dupdupninja.exe dist\dupdupninja.exe
+          $publish = "windows\DupdupNinjaWinUI\DupdupNinjaWinUI\bin\Release\net8.0-windows10.0.19041.0\${{ matrix.rid }}\publish"
+          if (Test-Path $publish) { Copy-Item "$publish\*" dist -Recurse -Force }
+          Compress-Archive -Path dist\* -DestinationPath dupdupninja-windows-${{ matrix.arch }}.zip -Force
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dupdupninja-windows-${{ matrix.arch }}
+          path: dupdupninja-windows-${{ matrix.arch }}.zip
