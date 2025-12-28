@@ -94,10 +94,7 @@ jobs:
           pip install --no-cache-dir appimage-builder
 
           if ! command -v apt-key >/dev/null 2>&1; then
-            cat > /usr/local/bin/apt-key <<'EOF'
-#!/bin/sh
-exit 0
-EOF
+            printf '%s\n' '#!/bin/sh' 'exit 0' > /usr/local/bin/apt-key
             chmod +x /usr/local/bin/apt-key
           fi
 
