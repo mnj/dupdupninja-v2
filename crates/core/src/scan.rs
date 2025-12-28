@@ -435,7 +435,7 @@ fn ffmpeg_snapshot_avif_inner(path: &Path, at_secs: f64, timeout: Duration) -> O
         .arg("-sn")
         .arg("-dn")
         .arg("-vf")
-        .arg("scale=1024:1024:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2")
+        .arg("scale='min(iw,1024)':'min(ih,1024)':force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2")
         .arg("-pix_fmt")
         .arg("yuv420p")
         .arg("-c:v")
