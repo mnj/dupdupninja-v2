@@ -16,6 +16,7 @@ pub struct DriveMetadata {
 
 #[derive(Debug, Clone)]
 pub struct MediaFileRecord {
+    pub file_id: Option<i64>,
     pub path: PathBuf,
     pub size_bytes: u64,
     pub modified_at: Option<SystemTime>,

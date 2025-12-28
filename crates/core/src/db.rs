@@ -42,11 +42,12 @@ impl SqliteScanStore {
             );
 
             CREATE TABLE IF NOT EXISTS files (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
               path TEXT NOT NULL,
               size_bytes INTEGER NOT NULL,
               modified_at_secs INTEGER,
               blake3 BLOB,
-              PRIMARY KEY (path)
+              UNIQUE(path)
             );
 
             CREATE INDEX IF NOT EXISTS idx_files_blake3 ON files(blake3);

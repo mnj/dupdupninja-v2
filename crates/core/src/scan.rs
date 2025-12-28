@@ -162,6 +162,7 @@ where
 
         bytes_seen = bytes_seen.saturating_add(md.len());
         let mut rec = MediaFileRecord {
+            file_id: None,
             path: relative_to_root(&config.root, &path).unwrap_or(path.clone()),
             size_bytes: md.len(),
             modified_at: md.modified().ok(),
