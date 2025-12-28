@@ -93,6 +93,14 @@ jobs:
           pip install --no-cache-dir "pip<25"
           pip install --no-cache-dir appimage-builder
 
+          if ! command -v apt-key >/dev/null 2>&1; then
+            cat > /usr/local/bin/apt-key <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+            chmod +x /usr/local/bin/apt-key
+          fi
+
           mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/512x512/apps
           cp target/${{ matrix.target }}/release/dupdupninja-ui-gtk AppDir/usr/bin/dupdupninja-ui-gtk
           cp packaging/linux/dupdupninja.desktop AppDir/usr/share/applications/dupdupninja.desktop
