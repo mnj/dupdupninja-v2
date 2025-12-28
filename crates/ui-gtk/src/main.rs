@@ -41,13 +41,14 @@ fn main() {
                             if let Some(path) = folder.path() {
                                 let db_path = scan_db_path(&path);
                                 let name = fileset_name_from_path(&path);
-                                add_fileset(ui_state.clone(), name.clone(), db_path.clone());
+                                let fileset_id =
+                                    add_fileset(ui_state.clone(), name, db_path.clone());
                                 start_scan(
                                     ui_state.clone(),
                                     path,
                                     dupdupninja_core::ScanRootKind::Folder,
                                     db_path,
-                                    name,
+                                    fileset_id,
                                 );
                             }
                         }
@@ -75,13 +76,14 @@ fn main() {
                     if let Some(path) = path {
                         let db_path = scan_db_path(&path);
                         let name = fileset_name_from_path(&path);
-                        add_fileset(ui_state.clone(), name.clone(), db_path.clone());
+                        let fileset_id =
+                            add_fileset(ui_state.clone(), name, db_path.clone());
                         start_scan(
                             ui_state.clone(),
                             path,
                             dupdupninja_core::ScanRootKind::Drive,
                             db_path,
-                            name,
+                            fileset_id,
                         );
                     }
                 });
@@ -182,6 +184,7 @@ fn main() {
     app_menu.append(Some("About"), Some("app.about"));
     app_menu.append(Some("Exit"), Some("app.quit"));
 
+    let ui_state_for_activate = ui_state.clone();
     app.connect_activate(move |app| {
         if let Some(display) = gtk::gdk::Display::default() {
             let theme = gtk::IconTheme::for_display(&display);
@@ -281,7 +284,7 @@ fn main() {
         window.set_content(Some(&toolbar));
 
         let (update_tx, update_rx) = std::sync::mpsc::channel::<UiUpdate>();
-        *ui_state.borrow_mut() = Some(UiState {
+        *ui_state_for_activate.borrow_mut() = Some(UiState {
             status_label: status_label.clone(),
             progress: progress.clone(),
             cancel_button: cancel_button.clone(),
@@ -294,11 +297,18 @@ fn main() {
             next_fileset_id: 1,
             active_fileset_id: None,
             fileset_placeholder: placeholder.clone(),
+            active_scan_fileset_id: None,
+            scan_actions_enabled: true,
         });
 
-        let ui_state_for_filesets = ui_state.clone();
+        restore_open_filesets(ui_state_for_activate.clone());
+
+        let ui_state_for_filesets = ui_state_for_activate.clone();
         fileset_list.connect_row_selected(move |list, row| {
-            if let Some(state) = ui_state_for_filesets.borrow_mut().as_mut() {
+            let Ok(mut state_ref) = ui_state_for_filesets.try_borrow_mut() else {
+                return;
+            };
+            if let Some(state) = state_ref.as_mut() {
                 let active_id = row.and_then(|row| unsafe {
                     row.data::<u64>("fileset-id").map(|id| *id.as_ref())
                 });
@@ -310,7 +320,7 @@ fn main() {
             }
         });
 
-        let ui_state_for_cancel = ui_state.clone();
+        let ui_state_for_cancel = ui_state_for_activate.clone();
         cancel_button.connect_clicked(move |_| {
             if let Some(state) = ui_state_for_cancel.borrow().as_ref() {
                 if let Some(token) = state.cancel_token.as_ref() {
@@ -319,7 +329,7 @@ fn main() {
             }
         });
 
-        let ui_state_for_updates = ui_state.clone();
+        let ui_state_for_updates = ui_state_for_activate.clone();
         glib::timeout_add_local(std::time::Duration::from_millis(100), move || {
             while let Ok(update) = update_rx.try_recv() {
                 if let Some(state) = ui_state_for_updates.borrow_mut().as_mut() {
@@ -330,6 +340,7 @@ fn main() {
                             state.progress.pulse();
                             state.progress.set_visible(true);
                             state.cancel_button.set_visible(true);
+                            set_scan_actions_enabled(state, false);
                         }
                         UiUpdate::PrescanDone { totals } => {
                             state.total_files = totals.files;
@@ -339,11 +350,13 @@ fn main() {
                             state.progress.set_text(Some("0%"));
                             state.progress.set_visible(true);
                             state.cancel_button.set_visible(true);
+                            set_scan_actions_enabled(state, false);
                         }
                         UiUpdate::Progress { text, fraction } => {
                             state.status_label.set_text(&text);
                             state.progress.set_visible(true);
                             state.cancel_button.set_visible(true);
+                            set_scan_actions_enabled(state, false);
                             if let Some(fraction) = fraction {
                                 state.progress.set_fraction(fraction.clamp(0.0, 1.0));
                                 let percent = (fraction * 100.0).round() as u32;
@@ -363,6 +376,29 @@ fn main() {
                             state.cancel_token = None;
                             state.total_files = 0;
                             state.total_bytes = 0;
+                            set_scan_actions_enabled(state, true);
+                            if let Some(fileset_id) = state.active_scan_fileset_id.take() {
+                                set_fileset_scanning(state, fileset_id, false);
+                                set_fileset_status(state, fileset_id, "completed");
+                            }
+                        }
+                        UiUpdate::Cancelled {
+                            text,
+                            fileset_id,
+                        } => {
+                            state.status_label.set_text(&text);
+                            state.progress.set_text(Some("Idle"));
+                            state.progress.set_fraction(0.0);
+                            state.cancel_button.set_sensitive(false);
+                            state.progress.set_visible(false);
+                            state.cancel_button.set_visible(false);
+                            state.cancel_token = None;
+                            state.total_files = 0;
+                            state.total_bytes = 0;
+                            state.active_scan_fileset_id = None;
+                            set_fileset_scanning(state, fileset_id, false);
+                            set_fileset_status(state, fileset_id, "incomplete");
+                            set_scan_actions_enabled(state, true);
                         }
                         UiUpdate::Error { text } => {
                             state.status_label.set_text(&text);
@@ -374,6 +410,10 @@ fn main() {
                             state.cancel_token = None;
                             state.total_files = 0;
                             state.total_bytes = 0;
+                            set_scan_actions_enabled(state, true);
+                            if let Some(fileset_id) = state.active_scan_fileset_id.take() {
+                                set_fileset_scanning(state, fileset_id, false);
+                            }
                         }
                     }
                 }
@@ -383,6 +423,11 @@ fn main() {
 
         window.present();
         window.maximize();
+    });
+
+    let ui_state_for_shutdown = ui_state.clone();
+    app.connect_shutdown(move |_| {
+        persist_open_filesets(ui_state_for_shutdown.clone());
     });
 
     app.run();
@@ -402,6 +447,8 @@ struct UiState {
     next_fileset_id: u64,
     active_fileset_id: Option<u64>,
     fileset_placeholder: gtk4::Label,
+    active_scan_fileset_id: Option<u64>,
+    scan_actions_enabled: bool,
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]
@@ -410,6 +457,7 @@ enum UiUpdate {
     PrescanDone { totals: dupdupninja_core::scan::ScanTotals },
     Progress { text: String, fraction: Option<f64> },
     Done { text: String },
+    Cancelled { text: String, fileset_id: u64 },
     Error { text: String },
 }
 
@@ -419,7 +467,7 @@ fn start_scan(
     root: std::path::PathBuf,
     root_kind: dupdupninja_core::ScanRootKind,
     db_path: std::path::PathBuf,
-    fileset_name: String,
+    fileset_id: u64,
 ) {
     use gtk4::prelude::WidgetExt;
     let (status_label, progress, cancel_button, update_tx) = {
@@ -440,6 +488,8 @@ fn start_scan(
         let mut state = ui_state.borrow_mut();
         if let Some(state) = state.as_mut() {
             state.cancel_token = Some(cancel_token.clone());
+            state.active_scan_fileset_id = Some(fileset_id);
+            set_fileset_scanning(state, fileset_id, true);
         }
     }
 
@@ -459,19 +509,6 @@ fn start_scan(
                 return;
             }
         };
-
-        let should_set_meta = store
-            .get_fileset_metadata()
-            .ok()
-            .flatten()
-            .is_none();
-        if should_set_meta {
-            let _ = store.set_fileset_metadata(&dupdupninja_core::FilesetMetadata {
-                name: fileset_name,
-                description: String::new(),
-                notes: String::new(),
-            });
-        }
 
         let cfg = dupdupninja_core::scan::ScanConfig {
             root: root.clone(),
@@ -495,8 +532,9 @@ fn start_scan(
         let totals = match prescan_result {
             Ok(totals) => totals,
             Err(dupdupninja_core::Error::Cancelled) => {
-                let _ = update_tx.send(UiUpdate::Done {
+                let _ = update_tx.send(UiUpdate::Cancelled {
                     text: "Status: Scan cancelled".to_string(),
+                    fileset_id,
                 });
                 return;
             }
@@ -546,8 +584,9 @@ fn start_scan(
                     result.stats.files_skipped
                 ),
             },
-            Err(dupdupninja_core::Error::Cancelled) => UiUpdate::Done {
+            Err(dupdupninja_core::Error::Cancelled) => UiUpdate::Cancelled {
                 text: "Status: Scan cancelled".to_string(),
+                fileset_id,
             },
             Err(err) => UiUpdate::Error {
                 text: format!("Status: Scan error: {err}"),
@@ -581,6 +620,20 @@ fn default_fileset_dir() -> std::path::PathBuf {
     base.push("dupdupninja");
     base.push("filesets");
     base
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn default_config_dir() -> std::path::PathBuf {
+    let mut base = gtk4::glib::user_config_dir();
+    base.push("dupdupninja");
+    base
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn open_filesets_path() -> std::path::PathBuf {
+    let mut path = default_config_dir();
+    path.push("open-filesets.txt");
+    path
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]
@@ -685,30 +738,13 @@ fn add_fileset(
     let close_action = gio::SimpleAction::new("close", None);
     close_action.connect_activate(glib::clone!(
         #[weak]
-        list,
-        #[weak]
         row,
         #[strong]
         close_handler_state,
         move |_, _| {
             let id = unsafe { row.data::<u64>("fileset-id").map(|id| *id.as_ref()) };
-            if let Some(state) = close_handler_state.borrow_mut().as_mut() {
-                if let Some(id) = id {
-                    state.filesets.retain(|entry| entry.id != id);
-                    if state.active_fileset_id == Some(id) {
-                        state.active_fileset_id = None;
-                    }
-                }
-            }
-            list.remove(&row);
-            if list.selected_row().is_none() {
-                if let Some(first) = list.row_at_index(0) {
-                    list.select_row(Some(&first));
-                } else if let Some(state) = close_handler_state.borrow_mut().as_mut() {
-                    state
-                        .fileset_placeholder
-                        .set_text("Select a fileset to view results.");
-                }
+            if let Some(id) = id {
+                remove_fileset_by_id(close_handler_state.clone(), id);
             }
         }
     ));
@@ -786,6 +822,19 @@ fn load_fileset_metadata(
     default_name: &str,
 ) -> dupdupninja_core::FilesetMetadata {
     let fallback = dupdupninja_core::FilesetMetadata {
+        created_at: std::time::SystemTime::now(),
+        root_kind: dupdupninja_core::ScanRootKind::Folder,
+        root_path: std::path::PathBuf::new(),
+        root_parent_path: None,
+        drive: dupdupninja_core::DriveMetadata {
+            id: None,
+            label: None,
+            fs_type: None,
+        },
+        host_os: String::new(),
+        host_os_version: String::new(),
+        app_version: "1.0.0".to_string(),
+        status: String::new(),
         name: default_name.to_string(),
         description: String::new(),
         notes: String::new(),
@@ -814,8 +863,132 @@ fn apply_fileset_metadata(row: &adw::ActionRow, meta: &dupdupninja_core::Fileset
         meta.name.trim()
     };
     row.set_title(name);
-    let subtitle = meta.description.trim();
-    row.set_subtitle(subtitle);
+    let status = meta.status.trim();
+    if status.eq_ignore_ascii_case("incomplete") {
+        row.set_subtitle("Status: Incomplete");
+    } else {
+        let subtitle = meta.description.trim();
+        row.set_subtitle(subtitle);
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn set_fileset_scanning(state: &mut UiState, fileset_id: u64, scanning: bool) {
+    use adw::prelude::*;
+    if let Some(entry) = state.filesets.iter().find(|entry| entry.id == fileset_id) {
+        if scanning {
+            entry.action_row.set_subtitle("Scanning...");
+        } else {
+            apply_fileset_metadata(&entry.action_row, &entry.metadata);
+        }
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn set_fileset_status(state: &mut UiState, fileset_id: u64, status: &str) {
+    if let Some(entry) = state.filesets.iter_mut().find(|entry| entry.id == fileset_id) {
+        entry.metadata.status = status.to_string();
+        if let Ok(store) = dupdupninja_core::db::SqliteScanStore::open(&entry.db_path) {
+            let _ = store.set_fileset_metadata(&entry.metadata);
+        }
+        apply_fileset_metadata(&entry.action_row, &entry.metadata);
+        if state.active_fileset_id == Some(fileset_id) {
+            update_fileset_placeholder(state);
+        }
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn restore_open_filesets(ui_state: std::rc::Rc<std::cell::RefCell<Option<UiState>>>) {
+    let path = open_filesets_path();
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(_) => return,
+    };
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let db_path = std::path::PathBuf::from(trimmed);
+        if db_path.is_file() {
+            let name = fileset_name_from_db(&db_path);
+            add_fileset(ui_state.clone(), name, db_path);
+        }
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn persist_open_filesets(ui_state: std::rc::Rc<std::cell::RefCell<Option<UiState>>>) {
+    let mut entries = Vec::new();
+    if let Some(state) = ui_state.borrow().as_ref() {
+        for entry in &state.filesets {
+            entries.push(entry.db_path.display().to_string());
+        }
+    }
+    let path = open_filesets_path();
+    if let Some(parent) = path.parent() {
+        if std::fs::create_dir_all(parent).is_err() {
+            return;
+        }
+    }
+    let content = entries.join("\n");
+    let _ = std::fs::write(path, content);
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn set_scan_actions_enabled(state: &mut UiState, enabled: bool) {
+    use gtk4::prelude::*;
+    if state.scan_actions_enabled == enabled {
+        return;
+    }
+    state.scan_actions_enabled = enabled;
+    if let Some(app) = gtk4::gio::Application::default() {
+        if let Some(action) = app.lookup_action("scan_folder") {
+            if let Ok(simple) = action.downcast::<gtk4::gio::SimpleAction>() {
+                simple.set_enabled(enabled);
+            }
+        }
+        if let Some(action) = app.lookup_action("scan_disk") {
+            if let Ok(simple) = action.downcast::<gtk4::gio::SimpleAction>() {
+                simple.set_enabled(enabled);
+            }
+        }
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn remove_fileset_by_id(
+    ui_state: std::rc::Rc<std::cell::RefCell<Option<UiState>>>,
+    fileset_id: u64,
+) {
+    let (list, row) = {
+        let mut state = ui_state.borrow_mut();
+        let Some(state) = state.as_mut() else {
+            return;
+        };
+        let pos = match state.filesets.iter().position(|entry| entry.id == fileset_id) {
+            Some(pos) => pos,
+            None => return,
+        };
+        let entry = state.filesets.remove(pos);
+        if state.active_fileset_id == Some(fileset_id) {
+            state.active_fileset_id = None;
+        }
+        (state.fileset_list.clone(), entry.row.clone())
+    };
+
+    list.remove(&row);
+
+    if let Some(state) = ui_state.borrow_mut().as_mut() {
+        if state.fileset_list.selected_row().is_none() {
+            if let Some(first) = state.fileset_list.row_at_index(0) {
+                state.fileset_list.select_row(Some(&first));
+            } else {
+                update_fileset_placeholder(state);
+            }
+        }
+    }
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]
@@ -847,7 +1020,7 @@ fn open_fileset_properties(
     use gtk4::prelude::*;
     use adw::prelude::*;
 
-    let (db_path, current_meta) = {
+    let (db_path, current_meta, total_files) = {
         let state = ui_state.borrow();
         let Some(state) = state.as_ref() else {
             return;
@@ -856,7 +1029,11 @@ fn open_fileset_properties(
             Some(entry) => entry,
             None => return,
         };
-        (entry.db_path.clone(), entry.metadata.clone())
+        let total_files = dupdupninja_core::db::SqliteScanStore::open(&entry.db_path)
+            .ok()
+            .and_then(|store| store.count_files().ok())
+            .unwrap_or(0);
+        (entry.db_path.clone(), entry.metadata.clone(), total_files)
     };
 
     let content = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
@@ -870,16 +1047,26 @@ fn open_fileset_properties(
     title.set_xalign(0.0);
     content.append(&title);
 
+    let name_label = gtk4::Label::new(Some("Name"));
+    name_label.set_xalign(0.0);
+    name_label.add_css_class("dim-label");
+    content.append(&name_label);
     let name_entry = gtk4::Entry::new();
     name_entry.set_text(&current_meta.name);
-    name_entry.set_placeholder_text(Some("Name"));
     content.append(&name_entry);
 
+    let description_label = gtk4::Label::new(Some("Description"));
+    description_label.set_xalign(0.0);
+    description_label.add_css_class("dim-label");
+    content.append(&description_label);
     let description_entry = gtk4::Entry::new();
     description_entry.set_text(&current_meta.description);
-    description_entry.set_placeholder_text(Some("Description"));
     content.append(&description_entry);
 
+    let notes_label = gtk4::Label::new(Some("Notes"));
+    notes_label.set_xalign(0.0);
+    notes_label.add_css_class("dim-label");
+    content.append(&notes_label);
     let notes_view = gtk4::TextView::new();
     notes_view.set_wrap_mode(gtk4::WrapMode::WordChar);
     let buffer = notes_view.buffer();
@@ -889,6 +1076,14 @@ fn open_fileset_properties(
     notes_scroller.set_vexpand(true);
     notes_scroller.set_child(Some(&notes_view));
     content.append(&notes_scroller);
+
+    let total_label = gtk4::Label::new(Some("Total files"));
+    total_label.set_xalign(0.0);
+    total_label.add_css_class("dim-label");
+    content.append(&total_label);
+    let total_value = gtk4::Label::new(Some(&total_files.to_string()));
+    total_value.set_xalign(0.0);
+    content.append(&total_value);
 
     let button_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
     button_row.set_halign(gtk4::Align::End);
@@ -925,6 +1120,7 @@ fn open_fileset_properties(
             name,
             description,
             notes,
+            ..current_meta.clone()
         };
 
         if let Ok(store) = dupdupninja_core::db::SqliteScanStore::open(&db_path) {

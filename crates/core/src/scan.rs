@@ -5,13 +5,13 @@ use std::sync::{
 };
 use std::time::SystemTime;
 
-use uuid::Uuid;
 use walkdir::WalkDir;
 
 use crate::db::SqliteScanStore;
 use crate::error::{Error, Result};
+use crate::drive;
 use crate::hash::blake3_file;
-use crate::models::{DriveMetadata, MediaFileRecord, ScanMetadata, ScanResult, ScanRootKind, ScanStats};
+use crate::models::{DriveMetadata, FilesetMetadata, MediaFileRecord, ScanResult, ScanRootKind, ScanStats};
 
 #[derive(Debug, Clone)]
 pub struct ScanConfig {
@@ -101,19 +101,31 @@ where
         )));
     }
 
-    let scan_id = Uuid::new_v4();
-    let meta = ScanMetadata {
-        id: scan_id,
+    let drive = drive::probe_for_path(&config.root).unwrap_or(DriveMetadata {
+        id: None,
+        label: None,
+        fs_type: None,
+    });
+    let root_parent_path = if config.root_kind == ScanRootKind::Folder {
+        config.root.parent().map(|p| p.to_path_buf())
+    } else {
+        None
+    };
+    let fileset_meta = FilesetMetadata {
         created_at: SystemTime::now(),
         root_kind: config.root_kind,
         root_path: config.root.clone(),
-        drive: DriveMetadata {
-            id: None,
-            label: None,
-            fs_type: None,
-        },
+        root_parent_path,
+        drive,
+        host_os: std::env::consts::OS.to_string(),
+        host_os_version: host_os_version(),
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+        status: String::new(),
+        name: fileset_name_from_root(&config.root),
+        description: String::new(),
+        notes: String::new(),
     };
-    store.insert_scan(&meta)?;
+    store.set_fileset_metadata(&fileset_meta)?;
 
     let mut stats = ScanStats::default();
     let mut bytes_seen = 0u64;
@@ -121,6 +133,7 @@ where
     for entry in WalkDir::new(&config.root).follow_links(false).into_iter() {
         if let Some(cancel) = cancel {
             if cancel.is_cancelled() {
+                update_fileset_status(store, config, "incomplete");
                 return Err(Error::Cancelled);
             }
         }
@@ -149,7 +162,6 @@ where
 
         bytes_seen = bytes_seen.saturating_add(md.len());
         let mut rec = MediaFileRecord {
-            scan_id,
             path: relative_to_root(&config.root, &path).unwrap_or(path.clone()),
             size_bytes: md.len(),
             modified_at: md.modified().ok(),
@@ -181,7 +193,8 @@ where
         });
     }
 
-    Ok(ScanResult { scan_id, stats })
+    update_fileset_status(store, config, "completed");
+    Ok(ScanResult { stats })
 }
 
 #[derive(Debug, Clone)]
@@ -258,4 +271,59 @@ where
 
 fn relative_to_root(root: &Path, path: &Path) -> Option<PathBuf> {
     path.strip_prefix(root).ok().map(|p| p.to_path_buf())
+}
+
+fn fileset_name_from_root(root: &Path) -> String {
+    root.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(|name| name.to_string())
+        .unwrap_or_else(|| root.to_string_lossy().to_string())
+}
+
+fn host_os_version() -> String {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(contents) = std::fs::read_to_string("/etc/os-release") {
+            for line in contents.lines() {
+                if let Some(value) = line.strip_prefix("PRETTY_NAME=") {
+                    return value.trim_matches('"').to_string();
+                }
+            }
+        }
+    }
+
+    String::new()
+}
+
+fn update_fileset_status(store: &SqliteScanStore, config: &ScanConfig, status: &str) {
+    let meta = store
+        .get_fileset_metadata()
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| FilesetMetadata {
+            created_at: SystemTime::now(),
+            root_kind: config.root_kind,
+            root_path: config.root.clone(),
+            root_parent_path: if config.root_kind == ScanRootKind::Folder {
+                config.root.parent().map(|p| p.to_path_buf())
+            } else {
+                None
+            },
+            drive: DriveMetadata {
+                id: None,
+                label: None,
+                fs_type: None,
+            },
+            host_os: std::env::consts::OS.to_string(),
+            host_os_version: host_os_version(),
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            status: String::new(),
+            name: fileset_name_from_root(&config.root),
+            description: String::new(),
+            notes: String::new(),
+        });
+    let mut updated = meta;
+    updated.status = status.to_string();
+    let _ = store.set_fileset_metadata(&updated);
 }

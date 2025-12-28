@@ -4,9 +4,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::error::Result;
-use crate::models::{
-    DriveMetadata, FilesetMetadata, MediaFileRecord, ScanId, ScanMetadata, ScanRootKind,
-};
+use crate::models::{DriveMetadata, FilesetMetadata, MediaFileRecord, ScanRootKind};
 
 pub struct SqliteScanStore {
     conn: Connection,
@@ -25,57 +23,34 @@ impl SqliteScanStore {
             r#"
             PRAGMA foreign_keys = ON;
 
-            CREATE TABLE IF NOT EXISTS scans (
-              id TEXT PRIMARY KEY NOT NULL,
-              created_at_secs INTEGER NOT NULL,
-              root_kind TEXT NOT NULL,
-              root_path TEXT NOT NULL,
+            CREATE TABLE IF NOT EXISTS fileset (
+              id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
+              created_at_secs INTEGER,
+              root_kind TEXT,
+              root_path TEXT,
+              root_parent_path TEXT,
               drive_id TEXT,
               drive_label TEXT,
-              drive_fs_type TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS files (
-              scan_id TEXT NOT NULL,
-              path TEXT NOT NULL,
-              size_bytes INTEGER NOT NULL,
-              modified_at_secs INTEGER,
-              blake3 BLOB,
-              PRIMARY KEY (scan_id, path),
-              FOREIGN KEY (scan_id) REFERENCES scans(id) ON DELETE CASCADE
-            );
-
-            CREATE TABLE IF NOT EXISTS fileset_metadata (
-              id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
+              drive_fs_type TEXT,
+              host_os TEXT,
+              host_os_version TEXT,
+              app_version TEXT,
+              status TEXT,
               name TEXT,
               description TEXT,
               notes TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS files (
+              path TEXT NOT NULL,
+              size_bytes INTEGER NOT NULL,
+              modified_at_secs INTEGER,
+              blake3 BLOB,
+              PRIMARY KEY (path)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_files_blake3 ON files(blake3);
             "#,
-        )?;
-        Ok(())
-    }
-
-    pub fn insert_scan(&self, meta: &ScanMetadata) -> Result<()> {
-        let created_at_secs = system_time_to_secs(meta.created_at);
-        self.conn.execute(
-            r#"
-            INSERT INTO scans (
-              id, created_at_secs, root_kind, root_path,
-              drive_id, drive_label, drive_fs_type
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-            "#,
-            params![
-                meta.id.to_string(),
-                created_at_secs,
-                root_kind_to_str(meta.root_kind),
-                meta.root_path.to_string_lossy(),
-                meta.drive.id,
-                meta.drive.label,
-                meta.drive.fs_type,
-            ],
         )?;
         Ok(())
     }
@@ -91,15 +66,14 @@ impl SqliteScanStore {
         self.conn.execute(
             r#"
             INSERT INTO files (
-              scan_id, path, size_bytes, modified_at_secs, blake3
-            ) VALUES (?1, ?2, ?3, ?4, ?5)
-            ON CONFLICT(scan_id, path) DO UPDATE SET
+              path, size_bytes, modified_at_secs, blake3
+            ) VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT(path) DO UPDATE SET
               size_bytes=excluded.size_bytes,
               modified_at_secs=excluded.modified_at_secs,
               blake3=excluded.blake3
             "#,
             params![
-                rec.scan_id.to_string(),
                 rec.path.to_string_lossy(),
                 rec.size_bytes as i64,
                 modified_at_secs,
@@ -109,66 +83,56 @@ impl SqliteScanStore {
         Ok(())
     }
 
-    pub fn get_scan(&self, id: ScanId) -> Result<Option<ScanMetadata>> {
-        let row = self
-            .conn
-            .query_row(
-                r#"
-                SELECT
-                  id, created_at_secs, root_kind, root_path,
-                  drive_id, drive_label, drive_fs_type
-                FROM scans
-                WHERE id = ?1
-                "#,
-                params![id.to_string()],
-                |r| {
-                    let id: String = r.get(0)?;
-                    let created_at_secs: i64 = r.get(1)?;
-                    let root_kind: String = r.get(2)?;
-                    let root_path: String = r.get(3)?;
-                    let drive_id: Option<String> = r.get(4)?;
-                    let drive_label: Option<String> = r.get(5)?;
-                    let drive_fs_type: Option<String> = r.get(6)?;
-
-                    Ok(ScanMetadata {
-                        id: id.parse().map_err(|_| {
-                            rusqlite::Error::FromSqlConversionFailure(
-                                0,
-                                rusqlite::types::Type::Text,
-                                Box::new(std::fmt::Error),
-                            )
-                        })?,
-                        created_at: secs_to_system_time(created_at_secs as u64),
-                        root_kind: str_to_root_kind(&root_kind),
-                        root_path: root_path.into(),
-                        drive: DriveMetadata {
-                            id: drive_id,
-                            label: drive_label,
-                            fs_type: drive_fs_type,
-                        },
-                    })
-                },
-            )
-            .optional()?;
-
-        Ok(row)
-    }
-
     pub fn get_fileset_metadata(&self) -> Result<Option<FilesetMetadata>> {
         let row = self
             .conn
             .query_row(
                 r#"
-                SELECT name, description, notes
-                FROM fileset_metadata
+                SELECT
+                  created_at_secs, root_kind, root_path, root_parent_path,
+                  drive_id, drive_label, drive_fs_type,
+                  host_os, host_os_version, app_version, status,
+                  name, description, notes
+                FROM fileset
                 WHERE id = 1
                 "#,
                 [],
                 |r| {
-                    let name: Option<String> = r.get(0)?;
-                    let description: Option<String> = r.get(1)?;
-                    let notes: Option<String> = r.get(2)?;
+                    let created_at_secs: Option<i64> = r.get(0)?;
+                    let root_kind: Option<String> = r.get(1)?;
+                    let root_path: Option<String> = r.get(2)?;
+                    let root_parent_path: Option<String> = r.get(3)?;
+                    let drive_id: Option<String> = r.get(4)?;
+                    let drive_label: Option<String> = r.get(5)?;
+                    let drive_fs_type: Option<String> = r.get(6)?;
+                    let host_os: Option<String> = r.get(7)?;
+                    let host_os_version: Option<String> = r.get(8)?;
+                    let app_version: Option<String> = r.get(9)?;
+                    let status: Option<String> = r.get(10)?;
+                    let name: Option<String> = r.get(11)?;
+                    let description: Option<String> = r.get(12)?;
+                    let notes: Option<String> = r.get(13)?;
                     Ok(FilesetMetadata {
+                        created_at: created_at_secs
+                            .map(|v| secs_to_system_time(v as u64))
+                            .unwrap_or_else(SystemTime::now),
+                        root_kind: root_kind
+                            .as_deref()
+                            .map(str_to_root_kind)
+                            .unwrap_or(ScanRootKind::Folder),
+                        root_path: root_path
+                            .map(std::path::PathBuf::from)
+                            .unwrap_or_default(),
+                        root_parent_path: root_parent_path.map(std::path::PathBuf::from),
+                        drive: DriveMetadata {
+                            id: drive_id,
+                            label: drive_label,
+                            fs_type: drive_fs_type,
+                        },
+                        host_os: host_os.unwrap_or_default(),
+                        host_os_version: host_os_version.unwrap_or_default(),
+                        app_version: app_version.unwrap_or_default(),
+                        status: status.unwrap_or_default(),
                         name: name.unwrap_or_default(),
                         description: description.unwrap_or_default(),
                         notes: notes.unwrap_or_default(),
@@ -180,18 +144,60 @@ impl SqliteScanStore {
     }
 
     pub fn set_fileset_metadata(&self, meta: &FilesetMetadata) -> Result<()> {
+        let created_at_secs = system_time_to_secs(meta.created_at);
+        let root_parent = meta
+            .root_parent_path
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string());
         self.conn.execute(
             r#"
-            INSERT INTO fileset_metadata (id, name, description, notes)
-            VALUES (1, ?1, ?2, ?3)
+            INSERT INTO fileset (
+              id, created_at_secs, root_kind, root_path, root_parent_path,
+              drive_id, drive_label, drive_fs_type,
+              host_os, host_os_version, app_version, status,
+              name, description, notes
+            ) VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
             ON CONFLICT(id) DO UPDATE SET
+              created_at_secs=excluded.created_at_secs,
+              root_kind=excluded.root_kind,
+              root_path=excluded.root_path,
+              root_parent_path=excluded.root_parent_path,
+              drive_id=excluded.drive_id,
+              drive_label=excluded.drive_label,
+              drive_fs_type=excluded.drive_fs_type,
+              host_os=excluded.host_os,
+              host_os_version=excluded.host_os_version,
+              app_version=excluded.app_version,
+              status=excluded.status,
               name=excluded.name,
               description=excluded.description,
               notes=excluded.notes
             "#,
-            params![meta.name, meta.description, meta.notes],
+            params![
+                created_at_secs as i64,
+                root_kind_to_str(meta.root_kind),
+                meta.root_path.to_string_lossy(),
+                root_parent,
+                meta.drive.id,
+                meta.drive.label,
+                meta.drive.fs_type,
+                meta.host_os,
+                meta.host_os_version,
+                meta.app_version,
+                meta.status,
+                meta.name,
+                meta.description,
+                meta.notes
+            ],
         )?;
         Ok(())
+    }
+
+    pub fn count_files(&self) -> Result<u64> {
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))?;
+        Ok(count.max(0) as u64)
     }
 }
 

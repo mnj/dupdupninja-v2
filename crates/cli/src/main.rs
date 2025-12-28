@@ -57,7 +57,6 @@ fn real_main() -> dupdupninja_core::Result<()> {
             };
             let res = scan_to_sqlite(&cfg, &store)?;
 
-            println!("scan_id: {}", res.scan_id);
             println!(
                 "files_seen: {}, hashed: {}, skipped: {}",
                 res.stats.files_seen, res.stats.files_hashed, res.stats.files_skipped
@@ -78,7 +77,7 @@ USAGE:
   dupdupninja scan --root <path> --db <sqlite_path> [--drive|--folder]
 
 NOTES:
-  - Scans are stored as standalone SQLite DBs (one per scan).
+  - Filesets are stored as standalone SQLite DBs (one per scan).
   - UI crates are present but stubbed; the CLI is the initial entrypoint.
 "#
     );
