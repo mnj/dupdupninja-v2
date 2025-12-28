@@ -13,6 +13,8 @@ use crate::drive;
 use crate::hash::{blake3_file, sha256_file};
 use std::io::Read;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 use wait_timeout::ChildExt;
 use crate::models::{DriveMetadata, FilesetMetadata, MediaFileRecord, ScanResult, ScanRootKind, ScanStats};
@@ -222,6 +224,17 @@ where
 }
 
 fn ffprobe_metadata(path: &Path) -> Option<String> {
+    let (tx, rx) = mpsc::channel();
+    let path = path.to_path_buf();
+    thread::spawn(move || {
+        let result = std::panic::catch_unwind(|| ffprobe_metadata_inner(&path)).ok().flatten();
+        let _ = tx.send(result);
+    });
+
+    rx.recv_timeout(Duration::from_secs(30)).ok().flatten()
+}
+
+fn ffprobe_metadata_inner(path: &Path) -> Option<String> {
     let mut child = Command::new("ffprobe")
         .arg("-v")
         .arg("error")
