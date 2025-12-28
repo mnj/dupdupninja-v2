@@ -10,7 +10,7 @@ use walkdir::WalkDir;
 use crate::db::SqliteScanStore;
 use crate::error::{Error, Result};
 use crate::drive;
-use crate::hash::blake3_file;
+use crate::hash::{blake3_file, sha256_file};
 use crate::models::{DriveMetadata, FilesetMetadata, MediaFileRecord, ScanResult, ScanRootKind, ScanStats};
 
 #[derive(Debug, Clone)]
@@ -175,6 +175,14 @@ where
             match blake3_file(&path) {
                 Ok(hash) => {
                     rec.blake3 = Some(hash);
+                }
+                Err(_) => {
+                    stats.files_skipped += 1;
+                }
+            }
+            match sha256_file(&path) {
+                Ok(hash) => {
+                    rec.sha256 = Some(hash);
                     stats.files_hashed += 1;
                 }
                 Err(_) => {
