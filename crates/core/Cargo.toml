@@ -6,6 +6,7 @@ rust-version.workspace = true
 
 [dependencies]
 blake3 = "1"
+infer = "0.16"
 rusqlite = { version = "0.32", features = ["bundled"] }
 sha2 = "0.10"
 thiserror = "2"

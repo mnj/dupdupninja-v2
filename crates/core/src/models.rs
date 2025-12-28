@@ -23,6 +23,7 @@ pub struct MediaFileRecord {
     pub blake3: Option<[u8; 32]>,
     pub sha256: Option<[u8; 32]>,
     pub ffmpeg_metadata: Option<String>,
+    pub file_type: Option<String>,
 }
 
 #[derive(Debug, Clone)]

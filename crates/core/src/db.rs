@@ -49,6 +49,7 @@ impl SqliteScanStore {
               blake3 BLOB,
               sha256 BLOB,
               ffmpeg_metadata TEXT,
+              file_type TEXT,
               UNIQUE(path)
             );
 
@@ -70,14 +71,15 @@ impl SqliteScanStore {
         self.conn.execute(
             r#"
             INSERT INTO files (
-              path, size_bytes, modified_at_secs, blake3, sha256, ffmpeg_metadata
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+              path, size_bytes, modified_at_secs, blake3, sha256, ffmpeg_metadata, file_type
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             ON CONFLICT(path) DO UPDATE SET
               size_bytes=excluded.size_bytes,
               modified_at_secs=excluded.modified_at_secs,
               blake3=excluded.blake3,
               sha256=excluded.sha256,
-              ffmpeg_metadata=excluded.ffmpeg_metadata
+              ffmpeg_metadata=excluded.ffmpeg_metadata,
+              file_type=excluded.file_type
             "#,
             params![
                 rec.path.to_string_lossy(),
@@ -86,6 +88,7 @@ impl SqliteScanStore {
                 blake3_bytes,
                 sha256_bytes,
                 rec.ffmpeg_metadata.as_deref(),
+                rec.file_type.as_deref(),
             ],
         )?;
         Ok(())

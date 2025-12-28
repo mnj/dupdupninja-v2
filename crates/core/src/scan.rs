@@ -169,6 +169,13 @@ where
             blake3: None,
             sha256: None,
             ffmpeg_metadata: None,
+            file_type: None,
+        };
+
+        rec.file_type = match infer::get_from_path(&path) {
+            Ok(Some(kind)) => Some(kind.mime_type().to_string()),
+            Ok(None) => None,
+            Err(_) => None,
         };
 
         if config.hash_files {
