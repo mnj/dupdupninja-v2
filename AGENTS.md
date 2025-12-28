@@ -20,6 +20,7 @@ This repo starts as a Rust workspace with a compiling skeleton; platform UIs are
 - Prefer small modules and clear data types in `dupdupninja-core` (`models`, `scan`, `db`, `hash`, `video`, `compare`).
 - Avoid adding heavy dependencies to the core unless they earn their keep.
 - For SQLite, prefer a schema that supports multiple scan DBs and efficient cross-scan comparisons.
+- Fileset databases use the `.ddn` extension (still SQLite under the hood).
 - Prefer a stable FFI surface:
   - C ABI (`extern "C"`) with opaque handles and explicit free functions.
   - Thread-local `dupdupninja_last_error_message()` (or an explicit error struct) for error reporting.

@@ -4,7 +4,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::error::Result;
-use crate::models::{DriveMetadata, MediaFileRecord, ScanId, ScanMetadata, ScanRootKind};
+use crate::models::{
+    DriveMetadata, FilesetMetadata, MediaFileRecord, ScanId, ScanMetadata, ScanRootKind,
+};
 
 pub struct SqliteScanStore {
     conn: Connection,
@@ -41,6 +43,13 @@ impl SqliteScanStore {
               blake3 BLOB,
               PRIMARY KEY (scan_id, path),
               FOREIGN KEY (scan_id) REFERENCES scans(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS fileset_metadata (
+              id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
+              name TEXT,
+              description TEXT,
+              notes TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_files_blake3 ON files(blake3);
@@ -144,6 +153,46 @@ impl SqliteScanStore {
 
         Ok(row)
     }
+
+    pub fn get_fileset_metadata(&self) -> Result<Option<FilesetMetadata>> {
+        let row = self
+            .conn
+            .query_row(
+                r#"
+                SELECT name, description, notes
+                FROM fileset_metadata
+                WHERE id = 1
+                "#,
+                [],
+                |r| {
+                    let name: Option<String> = r.get(0)?;
+                    let description: Option<String> = r.get(1)?;
+                    let notes: Option<String> = r.get(2)?;
+                    Ok(FilesetMetadata {
+                        name: name.unwrap_or_default(),
+                        description: description.unwrap_or_default(),
+                        notes: notes.unwrap_or_default(),
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    pub fn set_fileset_metadata(&self, meta: &FilesetMetadata) -> Result<()> {
+        self.conn.execute(
+            r#"
+            INSERT INTO fileset_metadata (id, name, description, notes)
+            VALUES (1, ?1, ?2, ?3)
+            ON CONFLICT(id) DO UPDATE SET
+              name=excluded.name,
+              description=excluded.description,
+              notes=excluded.notes
+            "#,
+            params![meta.name, meta.description, meta.notes],
+        )?;
+        Ok(())
+    }
 }
 
 fn system_time_to_secs(t: SystemTime) -> u64 {
@@ -169,4 +218,3 @@ fn str_to_root_kind(s: &str) -> ScanRootKind {
         _ => ScanRootKind::Folder,
     }
 }
-

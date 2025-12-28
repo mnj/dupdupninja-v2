@@ -37,6 +37,13 @@ pub struct MediaFileRecord {
 }
 
 #[derive(Debug, Default, Clone)]
+pub struct FilesetMetadata {
+    pub name: String,
+    pub description: String,
+    pub notes: String,
+}
+
+#[derive(Debug, Default, Clone)]
 pub struct ScanStats {
     pub files_seen: u64,
     pub files_hashed: u64,
@@ -48,4 +55,3 @@ pub struct ScanResult {
     pub scan_id: ScanId,
     pub stats: ScanStats,
 }
-

@@ -39,7 +39,16 @@ fn main() {
                     match dialog.select_folder_future(Some(&window)).await {
                         Ok(folder) => {
                             if let Some(path) = folder.path() {
-                                start_scan(ui_state.clone(), path, dupdupninja_core::ScanRootKind::Folder);
+                                let db_path = scan_db_path(&path);
+                                let name = fileset_name_from_path(&path);
+                                add_fileset(ui_state.clone(), name.clone(), db_path.clone());
+                                start_scan(
+                                    ui_state.clone(),
+                                    path,
+                                    dupdupninja_core::ScanRootKind::Folder,
+                                    db_path,
+                                    name,
+                                );
                             }
                         }
                         Err(err) => {
@@ -64,13 +73,60 @@ fn main() {
                 select_mount_path(&window, move |path| {
                     let ui_state = ui_state.clone();
                     if let Some(path) = path {
-                        start_scan(ui_state.clone(), path, dupdupninja_core::ScanRootKind::Drive);
+                        let db_path = scan_db_path(&path);
+                        let name = fileset_name_from_path(&path);
+                        add_fileset(ui_state.clone(), name.clone(), db_path.clone());
+                        start_scan(
+                            ui_state.clone(),
+                            path,
+                            dupdupninja_core::ScanRootKind::Drive,
+                            db_path,
+                            name,
+                        );
                     }
                 });
             }
         }
     ));
     app.add_action(&scan_disk);
+
+    let open_fileset = gio::SimpleAction::new("open_fileset", None);
+    open_fileset.connect_activate(glib::clone!(
+        #[weak]
+        app,
+        #[strong]
+        ui_state,
+        move |_, _| {
+            if let Some(window) = app.active_window() {
+                let ui_state = ui_state.clone();
+                glib::MainContext::ref_thread_default().spawn_local(async move {
+                    let dialog = gtk::FileDialog::new();
+                    dialog.set_title("Open fileset database");
+                    let filter = gtk::FileFilter::new();
+                    filter.set_name(Some("DupdupNinja filesets (*.ddn)"));
+                    filter.add_pattern("*.ddn");
+                    dialog.set_default_filter(Some(&filter));
+                    let filters = gio::ListStore::new::<gtk::FileFilter>();
+                    filters.append(&filter);
+                    dialog.set_filters(Some(&filters));
+                    let fileset_dir = default_fileset_dir();
+                    if fileset_dir.is_dir() {
+                        dialog.set_initial_folder(Some(&gio::File::for_path(fileset_dir)));
+                    } else {
+                        let home_dir = gtk4::glib::home_dir();
+                        dialog.set_initial_folder(Some(&gio::File::for_path(home_dir)));
+                    }
+                    if let Ok(file) = dialog.open_future(Some(&window)).await {
+                        if let Some(path) = file.path() {
+                            let name = fileset_name_from_db(&path);
+                            add_fileset(ui_state.clone(), name, path);
+                        }
+                    }
+                });
+            }
+        }
+    ));
+    app.add_action(&open_fileset);
 
     let settings = gio::SimpleAction::new("settings", None);
     settings.connect_activate(glib::clone!(
@@ -138,15 +194,6 @@ fn main() {
         window.set_icon_name(Some("dupdupninja"));
 
         let header = adw::HeaderBar::new();
-        let new_scan_menu = gio::Menu::new();
-        new_scan_menu.append(Some("Scan Folder…"), Some("app.scan_folder"));
-        new_scan_menu.append(Some("Scan Disk…"), Some("app.scan_disk"));
-        let new_scan_button = gtk::MenuButton::new();
-        new_scan_button.set_icon_name("list-add-symbolic");
-        new_scan_button.set_tooltip_text(Some("New scan/fileset"));
-        let new_scan_popover = gtk::PopoverMenu::from_model(Some(&new_scan_menu));
-        new_scan_button.set_popover(Some(&new_scan_popover));
-        header.pack_start(&new_scan_button);
 
         let menu_button = gtk::MenuButton::new();
         menu_button.set_icon_name("open-menu-symbolic");
@@ -154,10 +201,60 @@ fn main() {
         menu_button.set_popover(Some(&popover));
         header.pack_end(&menu_button);
 
-        let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let content = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         let toolbar = adw::ToolbarView::new();
         toolbar.add_top_bar(&header);
         toolbar.set_content(Some(&content));
+
+        let sidebar = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        sidebar.set_margin_top(12);
+        sidebar.set_margin_bottom(12);
+        sidebar.set_margin_start(12);
+        sidebar.set_margin_end(6);
+        sidebar.set_size_request(260, -1);
+        sidebar.set_vexpand(true);
+
+        let fileset_header = gtk::Label::new(Some("Filesets"));
+        fileset_header.set_xalign(0.0);
+        fileset_header.add_css_class("title-4");
+        sidebar.append(&fileset_header);
+
+        let fileset_menu = gio::Menu::new();
+        let open_section = gio::Menu::new();
+        open_section.append(Some("Open Existing…"), Some("app.open_fileset"));
+        fileset_menu.append_section(None, &open_section);
+        let scan_section = gio::Menu::new();
+        scan_section.append(Some("Scan Folder…"), Some("app.scan_folder"));
+        scan_section.append(Some("Scan Disk…"), Some("app.scan_disk"));
+        fileset_menu.append_section(None, &scan_section);
+        let fileset_button = gtk::MenuButton::new();
+        fileset_button.set_label("Fileset");
+        fileset_button.set_icon_name("list-add-symbolic");
+        fileset_button.set_always_show_arrow(true);
+        fileset_button.set_tooltip_text(Some("Add or open a fileset"));
+        let fileset_popover = gtk::PopoverMenu::from_model(Some(&fileset_menu));
+        fileset_button.set_popover(Some(&fileset_popover));
+        sidebar.append(&fileset_button);
+
+        let fileset_list = gtk::ListBox::new();
+        fileset_list.set_selection_mode(gtk::SelectionMode::Single);
+        fileset_list.add_css_class("boxed-list");
+        let fileset_scroller = gtk::ScrolledWindow::new();
+        fileset_scroller.set_vexpand(true);
+        fileset_scroller.set_child(Some(&fileset_list));
+        sidebar.append(&fileset_scroller);
+
+        let main_area = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        main_area.set_hexpand(true);
+        main_area.set_vexpand(true);
+        let placeholder = gtk::Label::new(Some("Select a fileset to view results."));
+        placeholder.set_margin_top(18);
+        placeholder.set_margin_start(18);
+        placeholder.set_xalign(0.0);
+        main_area.append(&placeholder);
+
+        content.append(&sidebar);
+        content.append(&main_area);
 
         let status_bar = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         status_bar.set_margin_top(6);
@@ -172,8 +269,10 @@ fn main() {
         progress.set_fraction(0.0);
         progress.set_show_text(true);
         progress.set_text(Some("Idle"));
+        progress.set_visible(false);
         let cancel_button = gtk::Button::with_label("Cancel");
         cancel_button.set_sensitive(false);
+        cancel_button.set_visible(false);
         status_bar.append(&status_label);
         status_bar.append(&progress);
         status_bar.append(&cancel_button);
@@ -190,6 +289,25 @@ fn main() {
             update_tx: update_tx.clone(),
             total_files: 0,
             total_bytes: 0,
+            fileset_list: fileset_list.clone(),
+            filesets: Vec::new(),
+            next_fileset_id: 1,
+            active_fileset_id: None,
+            fileset_placeholder: placeholder.clone(),
+        });
+
+        let ui_state_for_filesets = ui_state.clone();
+        fileset_list.connect_row_selected(move |list, row| {
+            if let Some(state) = ui_state_for_filesets.borrow_mut().as_mut() {
+                let active_id = row.and_then(|row| unsafe {
+                    row.data::<u64>("fileset-id").map(|id| *id.as_ref())
+                });
+                state.active_fileset_id = active_id;
+                update_fileset_placeholder(state);
+                if active_id.is_none() && list.row_at_index(0).is_some() {
+                    list.select_row(list.row_at_index(0).as_ref());
+                }
+            }
         });
 
         let ui_state_for_cancel = ui_state.clone();
@@ -210,6 +328,8 @@ fn main() {
                             state.status_label.set_text(&text);
                             state.progress.set_text(Some("Preparing..."));
                             state.progress.pulse();
+                            state.progress.set_visible(true);
+                            state.cancel_button.set_visible(true);
                         }
                         UiUpdate::PrescanDone { totals } => {
                             state.total_files = totals.files;
@@ -217,9 +337,13 @@ fn main() {
                             state.status_label.set_text("Status: Scanning...");
                             state.progress.set_fraction(0.0);
                             state.progress.set_text(Some("0%"));
+                            state.progress.set_visible(true);
+                            state.cancel_button.set_visible(true);
                         }
                         UiUpdate::Progress { text, fraction } => {
                             state.status_label.set_text(&text);
+                            state.progress.set_visible(true);
+                            state.cancel_button.set_visible(true);
                             if let Some(fraction) = fraction {
                                 state.progress.set_fraction(fraction.clamp(0.0, 1.0));
                                 let percent = (fraction * 100.0).round() as u32;
@@ -234,6 +358,8 @@ fn main() {
                             state.progress.set_text(Some("Idle"));
                             state.progress.set_fraction(0.0);
                             state.cancel_button.set_sensitive(false);
+                            state.progress.set_visible(false);
+                            state.cancel_button.set_visible(false);
                             state.cancel_token = None;
                             state.total_files = 0;
                             state.total_bytes = 0;
@@ -243,6 +369,8 @@ fn main() {
                             state.progress.set_text(Some("Idle"));
                             state.progress.set_fraction(0.0);
                             state.cancel_button.set_sensitive(false);
+                            state.progress.set_visible(false);
+                            state.cancel_button.set_visible(false);
                             state.cancel_token = None;
                             state.total_files = 0;
                             state.total_bytes = 0;
@@ -269,6 +397,11 @@ struct UiState {
     update_tx: std::sync::mpsc::Sender<UiUpdate>,
     total_files: u64,
     total_bytes: u64,
+    fileset_list: gtk4::ListBox,
+    filesets: Vec<FilesetEntry>,
+    next_fileset_id: u64,
+    active_fileset_id: Option<u64>,
+    fileset_placeholder: gtk4::Label,
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]
@@ -285,6 +418,8 @@ fn start_scan(
     ui_state: std::rc::Rc<std::cell::RefCell<Option<UiState>>>,
     root: std::path::PathBuf,
     root_kind: dupdupninja_core::ScanRootKind,
+    db_path: std::path::PathBuf,
+    fileset_name: String,
 ) {
     use gtk4::prelude::WidgetExt;
     let (status_label, progress, cancel_button, update_tx) = {
@@ -311,10 +446,11 @@ fn start_scan(
     status_label.set_text("Status: Scanning...");
     progress.set_text(Some("Scanning..."));
     progress.pulse();
+    progress.set_visible(true);
     cancel_button.set_sensitive(true);
+    cancel_button.set_visible(true);
 
     std::thread::spawn(move || {
-        let db_path = scan_db_path();
         let store = match dupdupninja_core::db::SqliteScanStore::open(&db_path) {
             Ok(store) => store,
             Err(err) => {
@@ -323,6 +459,19 @@ fn start_scan(
                 return;
             }
         };
+
+        let should_set_meta = store
+            .get_fileset_metadata()
+            .ok()
+            .flatten()
+            .is_none();
+        if should_set_meta {
+            let _ = store.set_fileset_metadata(&dupdupninja_core::FilesetMetadata {
+                name: fileset_name,
+                description: String::new(),
+                notes: String::new(),
+            });
+        }
 
         let cfg = dupdupninja_core::scan::ScanConfig {
             root: root.clone(),
@@ -409,14 +558,397 @@ fn start_scan(
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]
-fn scan_db_path() -> std::path::PathBuf {
-    let mut path = std::env::temp_dir();
+fn scan_db_path(root: &std::path::Path) -> std::path::PathBuf {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    path.push(format!("dupdupninja-scan-{ts}.sqlite3"));
-    path
+    let name = sanitize_fileset_name(root);
+    let file_name = format!("{name}-{ts}.ddn");
+    let mut base = default_fileset_dir();
+    if std::fs::create_dir_all(&base).is_err() {
+        let mut fallback = std::env::temp_dir();
+        fallback.push(file_name);
+        return fallback;
+    }
+    base.push(file_name);
+    base
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn default_fileset_dir() -> std::path::PathBuf {
+    let mut base = gtk4::glib::user_data_dir();
+    base.push("dupdupninja");
+    base.push("filesets");
+    base
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn sanitize_fileset_name(root: &std::path::Path) -> String {
+    let raw = fileset_name_from_path(root);
+    let mut out = String::with_capacity(raw.len());
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            out.push(ch.to_ascii_lowercase());
+        } else if ch.is_whitespace() || ch == '.' {
+            out.push('-');
+        }
+    }
+    if out.is_empty() {
+        "fileset".to_string()
+    } else {
+        out
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+struct FilesetEntry {
+    id: u64,
+    db_path: std::path::PathBuf,
+    normalized_path: std::path::PathBuf,
+    action_row: adw::ActionRow,
+    row: gtk4::ListBoxRow,
+    metadata: dupdupninja_core::FilesetMetadata,
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn add_fileset(
+    ui_state: std::rc::Rc<std::cell::RefCell<Option<UiState>>>,
+    name: String,
+    db_path: std::path::PathBuf,
+) -> u64 {
+    use adw::prelude::*;
+    use gtk4::gio;
+    use gtk4::glib;
+    use gtk4::prelude::WidgetExt;
+    let normalized_path = normalize_fileset_path(&db_path);
+    let (list, id, close_handler_state, existing_row) = {
+        let mut state = ui_state.borrow_mut();
+        let Some(state) = state.as_mut() else {
+            return 0;
+        };
+        if let Some(existing) = state
+            .filesets
+            .iter()
+            .find(|entry| entry.normalized_path == normalized_path)
+        {
+            let id = existing.id;
+            let row = existing.row.clone();
+            state.active_fileset_id = Some(id);
+            update_fileset_placeholder(state);
+            (
+                state.fileset_list.clone(),
+                id,
+                ui_state.clone(),
+                Some(row),
+            )
+        } else {
+            let id = state.next_fileset_id;
+            state.next_fileset_id += 1;
+            (
+                state.fileset_list.clone(),
+                id,
+                ui_state.clone(),
+                None,
+            )
+        }
+    };
+
+    if let Some(row) = existing_row {
+        list.select_row(Some(&row));
+        return id;
+    }
+
+    let metadata = load_fileset_metadata(&db_path, &name);
+    let row = gtk4::ListBoxRow::new();
+    let action_row = adw::ActionRow::new();
+    apply_fileset_metadata(&action_row, &metadata);
+    let menu_button = gtk4::MenuButton::new();
+    menu_button.set_icon_name("open-menu-symbolic");
+    menu_button.set_tooltip_text(Some("Fileset actions"));
+    menu_button.add_css_class("flat");
+
+    let menu_model = gio::Menu::new();
+    menu_model.append(Some("Close"), Some("fileset.close"));
+    menu_model.append_section(None, &gio::Menu::new());
+    menu_model.append(Some("Properties"), Some("fileset.properties"));
+    menu_button.set_menu_model(Some(&menu_model));
+    action_row.add_suffix(&menu_button);
+    row.set_child(Some(&action_row));
+    row.set_activatable(true);
+    row.set_selectable(true);
+    unsafe {
+        row.set_data("fileset-id", id);
+    }
+
+    let action_group = gio::SimpleActionGroup::new();
+    let close_action = gio::SimpleAction::new("close", None);
+    close_action.connect_activate(glib::clone!(
+        #[weak]
+        list,
+        #[weak]
+        row,
+        #[strong]
+        close_handler_state,
+        move |_, _| {
+            let id = unsafe { row.data::<u64>("fileset-id").map(|id| *id.as_ref()) };
+            if let Some(state) = close_handler_state.borrow_mut().as_mut() {
+                if let Some(id) = id {
+                    state.filesets.retain(|entry| entry.id != id);
+                    if state.active_fileset_id == Some(id) {
+                        state.active_fileset_id = None;
+                    }
+                }
+            }
+            list.remove(&row);
+            if list.selected_row().is_none() {
+                if let Some(first) = list.row_at_index(0) {
+                    list.select_row(Some(&first));
+                } else if let Some(state) = close_handler_state.borrow_mut().as_mut() {
+                    state
+                        .fileset_placeholder
+                        .set_text("Select a fileset to view results.");
+                }
+            }
+        }
+    ));
+    let properties_action = gio::SimpleAction::new("properties", None);
+    properties_action.connect_activate(glib::clone!(
+        #[weak]
+        list,
+        #[strong]
+        close_handler_state,
+        move |_, _| {
+            if let Some(root) = list.root() {
+                if let Ok(window) = root.downcast::<gtk4::Window>() {
+                    open_fileset_properties(close_handler_state.clone(), id, &window);
+                }
+            }
+        }
+    ));
+    action_group.add_action(&close_action);
+    action_group.add_action(&properties_action);
+    row.insert_action_group("fileset", Some(&action_group));
+
+    let context_menu_button = menu_button.clone();
+    let gesture = gtk4::GestureClick::new();
+    gesture.set_button(gtk4::gdk::BUTTON_SECONDARY);
+    gesture.connect_pressed(move |_, _, _, _| {
+        context_menu_button.popup();
+    });
+    row.add_controller(gesture);
+
+    list.append(&row);
+    list.select_row(Some(&row));
+
+    if let Some(state) = ui_state.borrow_mut().as_mut() {
+        state.filesets.push(FilesetEntry {
+            id,
+            db_path,
+            normalized_path,
+            action_row: action_row.clone(),
+            row: row.clone(),
+            metadata,
+        });
+        state.active_fileset_id = Some(id);
+        update_fileset_placeholder(state);
+    }
+
+    id
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn fileset_name_from_path(path: &std::path::Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(|name| name.to_string())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn fileset_name_from_db(path: &std::path::Path) -> String {
+    path.file_stem()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .map(|name| name.to_string())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn normalize_fileset_path(path: &std::path::Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn load_fileset_metadata(
+    db_path: &std::path::Path,
+    default_name: &str,
+) -> dupdupninja_core::FilesetMetadata {
+    let fallback = dupdupninja_core::FilesetMetadata {
+        name: default_name.to_string(),
+        description: String::new(),
+        notes: String::new(),
+    };
+    let store = match dupdupninja_core::db::SqliteScanStore::open(db_path) {
+        Ok(store) => store,
+        Err(_) => return fallback,
+    };
+    match store.get_fileset_metadata() {
+        Ok(Some(mut meta)) => {
+            if meta.name.trim().is_empty() {
+                meta.name = default_name.to_string();
+            }
+            meta
+        }
+        _ => fallback,
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn apply_fileset_metadata(row: &adw::ActionRow, meta: &dupdupninja_core::FilesetMetadata) {
+    use adw::prelude::*;
+    let name = if meta.name.trim().is_empty() {
+        "Fileset"
+    } else {
+        meta.name.trim()
+    };
+    row.set_title(name);
+    let subtitle = meta.description.trim();
+    row.set_subtitle(subtitle);
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn update_fileset_placeholder(state: &mut UiState) {
+    if let Some(active_id) = state.active_fileset_id {
+        if let Some(entry) = state.filesets.iter().find(|entry| entry.id == active_id) {
+            let name = if entry.metadata.name.trim().is_empty() {
+                "Fileset"
+            } else {
+                entry.metadata.name.trim()
+            };
+            state
+                .fileset_placeholder
+                .set_text(&format!("Active fileset: {}", name));
+            return;
+        }
+    }
+    state
+        .fileset_placeholder
+        .set_text("Select a fileset to view results.");
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn open_fileset_properties(
+    ui_state: std::rc::Rc<std::cell::RefCell<Option<UiState>>>,
+    fileset_id: u64,
+    window: &gtk4::Window,
+) {
+    use gtk4::prelude::*;
+    use adw::prelude::*;
+
+    let (db_path, current_meta) = {
+        let state = ui_state.borrow();
+        let Some(state) = state.as_ref() else {
+            return;
+        };
+        let entry = match state.filesets.iter().find(|entry| entry.id == fileset_id) {
+            Some(entry) => entry,
+            None => return,
+        };
+        (entry.db_path.clone(), entry.metadata.clone())
+    };
+
+    let content = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+    content.set_margin_top(12);
+    content.set_margin_bottom(12);
+    content.set_margin_start(12);
+    content.set_margin_end(12);
+
+    let title = gtk4::Label::new(Some("Fileset Properties"));
+    title.add_css_class("title-3");
+    title.set_xalign(0.0);
+    content.append(&title);
+
+    let name_entry = gtk4::Entry::new();
+    name_entry.set_text(&current_meta.name);
+    name_entry.set_placeholder_text(Some("Name"));
+    content.append(&name_entry);
+
+    let description_entry = gtk4::Entry::new();
+    description_entry.set_text(&current_meta.description);
+    description_entry.set_placeholder_text(Some("Description"));
+    content.append(&description_entry);
+
+    let notes_view = gtk4::TextView::new();
+    notes_view.set_wrap_mode(gtk4::WrapMode::WordChar);
+    let buffer = notes_view.buffer();
+    buffer.set_text(&current_meta.notes);
+    let notes_scroller = gtk4::ScrolledWindow::new();
+    notes_scroller.set_min_content_height(120);
+    notes_scroller.set_vexpand(true);
+    notes_scroller.set_child(Some(&notes_view));
+    content.append(&notes_scroller);
+
+    let button_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    button_row.set_halign(gtk4::Align::End);
+    let cancel_button = gtk4::Button::with_label("Cancel");
+    let save_button = gtk4::Button::with_label("Save");
+    save_button.add_css_class("suggested-action");
+    button_row.append(&cancel_button);
+    button_row.append(&save_button);
+    content.append(&button_row);
+
+    let dialog = adw::Dialog::builder()
+        .content_width(520)
+        .content_height(360)
+        .child(&content)
+        .build();
+
+    let ui_state_for_save = ui_state.clone();
+    let dialog_for_save = dialog.clone();
+    save_button.connect_clicked(move |_| {
+        let mut name = name_entry.text().to_string();
+        if name.trim().is_empty() {
+            name = "Fileset".to_string();
+        } else {
+            name = name.trim().to_string();
+        }
+        let description = description_entry.text().trim().to_string();
+        let buffer = notes_view.buffer();
+        let notes = buffer
+            .text(&buffer.start_iter(), &buffer.end_iter(), true)
+            .trim()
+            .to_string();
+
+        let meta = dupdupninja_core::FilesetMetadata {
+            name,
+            description,
+            notes,
+        };
+
+        if let Ok(store) = dupdupninja_core::db::SqliteScanStore::open(&db_path) {
+            let _ = store.set_fileset_metadata(&meta);
+        }
+
+        if let Some(state) = ui_state_for_save.borrow_mut().as_mut() {
+            if let Some(entry) = state.filesets.iter_mut().find(|entry| entry.id == fileset_id) {
+                entry.metadata = meta;
+                apply_fileset_metadata(&entry.action_row, &entry.metadata);
+                if state.active_fileset_id == Some(fileset_id) {
+                    update_fileset_placeholder(state);
+                }
+            }
+        }
+        let _ = dialog_for_save.close();
+    });
+
+    let dialog_for_cancel = dialog.clone();
+    cancel_button.connect_clicked(move |_| {
+        let _ = dialog_for_cancel.close();
+    });
+
+    dialog.present(Some(window));
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]
