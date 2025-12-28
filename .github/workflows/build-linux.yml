@@ -85,7 +85,7 @@ jobs:
             patchelf \
             python3 \
             python3-pip \
-            python3-venv \
+            python3.13-venv \
             squashfs-tools
 
           python3 -m venv .venv
