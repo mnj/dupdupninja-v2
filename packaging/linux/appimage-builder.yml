@@ -1,0 +1,26 @@
+version: 1
+
+AppDir:
+  path: AppDir
+  app_info:
+    id: io.dupdupninja.DupdupNinja
+    name: DupdupNinja
+    icon: dupdupninja
+    version: "@VERSION@"
+    exec: usr/bin/dupdupninja-ui-gtk
+  apt:
+    arch: @DEB_ARCH@
+    sources:
+      - sourceline: "deb http://deb.debian.org/debian trixie main"
+      - sourceline: "deb http://deb.debian.org/debian trixie-updates main"
+      - sourceline: "deb http://deb.debian.org/debian-security trixie-security main"
+    include:
+      - libgtk-4-1
+      - libadwaita-1-0
+  runtime:
+    env:
+      GTK_USE_PORTAL: "1"
+
+AppImage:
+  arch: @ARCH@
+  update-information: none
