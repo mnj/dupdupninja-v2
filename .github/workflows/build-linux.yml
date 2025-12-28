@@ -90,6 +90,7 @@ jobs:
 
           python3 -m venv .venv
           . .venv/bin/activate
+          pip install --no-cache-dir "pip<25"
           pip install --no-cache-dir appimage-builder
 
           mkdir -p AppDir/usr/bin AppDir/usr/share/applications AppDir/usr/share/icons/hicolor/512x512/apps
