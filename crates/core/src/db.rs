@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::error::Result;
-use crate::models::{DriveMetadata, FilesetMetadata, MediaFileRecord, ScanRootKind};
+use crate::models::{DriveMetadata, FileSnapshotRecord, FilesetMetadata, MediaFileRecord, ScanRootKind};
 
 pub struct SqliteScanStore {
     conn: Connection,
@@ -54,12 +54,25 @@ impl SqliteScanStore {
             );
 
             CREATE INDEX IF NOT EXISTS idx_files_blake3 ON files(blake3);
+
+            CREATE TABLE IF NOT EXISTS file_snapshots (
+              file_id INTEGER NOT NULL,
+              snapshot_index INTEGER NOT NULL,
+              snapshot_count INTEGER NOT NULL,
+              at_ms INTEGER NOT NULL,
+              duration_ms INTEGER,
+              image_avif BLOB NOT NULL,
+              PRIMARY KEY (file_id, snapshot_index),
+              FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE CASCADE
+            ) WITHOUT ROWID;
+
+            CREATE INDEX IF NOT EXISTS idx_file_snapshots_file_id ON file_snapshots(file_id);
             "#,
         )?;
         Ok(())
     }
 
-    pub fn upsert_file(&self, rec: &MediaFileRecord) -> Result<()> {
+    pub fn upsert_file(&self, rec: &MediaFileRecord) -> Result<i64> {
         let modified_at_secs = rec
             .modified_at
             .map(system_time_to_secs)
@@ -91,7 +104,54 @@ impl SqliteScanStore {
                 rec.file_type.as_deref(),
             ],
         )?;
-        Ok(())
+        let file_id = self
+            .conn
+            .query_row(
+                r#"SELECT id FROM files WHERE path = ?1"#,
+                params![rec.path.to_string_lossy()],
+                |r| r.get::<_, i64>(0),
+            )?;
+        Ok(file_id)
+    }
+
+    pub fn replace_file_snapshots(&self, file_id: i64, snapshots: &[FileSnapshotRecord]) -> Result<()> {
+        self.conn.execute_batch("BEGIN")?;
+        let res: Result<()> = (|| {
+            self.conn.execute(
+                r#"DELETE FROM file_snapshots WHERE file_id = ?1"#,
+                params![file_id],
+            )?;
+
+            for snap in snapshots {
+                self.conn.execute(
+                r#"
+                INSERT INTO file_snapshots (
+                  file_id, snapshot_index, snapshot_count, at_ms, duration_ms, image_avif
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                "#,
+                params![
+                    file_id,
+                    snap.snapshot_index as i64,
+                    snap.snapshot_count as i64,
+                    snap.at_ms,
+                    snap.duration_ms,
+                    &snap.image_avif,
+                ],
+                )?;
+            }
+            Ok(())
+        })();
+
+        match res {
+            Ok(()) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
     }
 
     pub fn get_fileset_metadata(&self) -> Result<Option<FilesetMetadata>> {

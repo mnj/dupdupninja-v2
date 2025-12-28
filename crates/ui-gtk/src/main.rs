@@ -514,6 +514,8 @@ fn start_scan(
             root: root.clone(),
             root_kind,
             hash_files: true,
+            capture_snapshots: true,
+            snapshots_per_video: 3,
         };
 
     let prescan_result = dupdupninja_core::scan::prescan(&cfg, Some(&cancel_token), |progress| {

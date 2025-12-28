@@ -206,6 +206,8 @@ pub unsafe extern "C" fn dupdupninja_scan_folder_to_sqlite(
         root: root_path,
         root_kind: ScanRootKind::Folder,
         hash_files: true,
+        capture_snapshots: true,
+        snapshots_per_video: 3,
     };
 
     match scan_to_sqlite(&cfg, &store) {
@@ -268,6 +270,8 @@ pub unsafe extern "C" fn dupdupninja_scan_folder_to_sqlite_with_progress(
         root: root_path,
         root_kind: ScanRootKind::Folder,
         hash_files: true,
+        capture_snapshots: true,
+        snapshots_per_video: 3,
     };
 
     let cancel_ref = if cancel_token.is_null() {
@@ -333,6 +337,8 @@ pub unsafe extern "C" fn dupdupninja_prescan_folder(
         root: root_path,
         root_kind: ScanRootKind::Folder,
         hash_files: false,
+        capture_snapshots: true,
+        snapshots_per_video: 3,
     };
 
     let cancel_ref = if cancel_token.is_null() {
@@ -423,6 +429,8 @@ pub unsafe extern "C" fn dupdupninja_scan_folder_to_sqlite_with_progress_and_tot
         root: root_path,
         root_kind: ScanRootKind::Folder,
         hash_files: true,
+        capture_snapshots: true,
+        snapshots_per_video: 3,
     };
 
     let cancel_ref = if cancel_token.is_null() {

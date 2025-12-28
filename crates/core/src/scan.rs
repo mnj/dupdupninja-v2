@@ -1,9 +1,13 @@
+use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
+    mpsc,
     Arc,
 };
-use std::time::SystemTime;
+use std::thread;
+use std::time::{Duration, Instant, SystemTime};
 
 use walkdir::WalkDir;
 
@@ -11,19 +15,20 @@ use crate::db::SqliteScanStore;
 use crate::error::{Error, Result};
 use crate::drive;
 use crate::hash::{blake3_file, sha256_file};
-use std::io::Read;
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::thread;
-use std::time::Duration;
+use crate::models::{
+    DriveMetadata, FileSnapshotRecord, FilesetMetadata, MediaFileRecord, ScanResult, ScanRootKind,
+    ScanStats,
+};
+use serde_json::Value;
 use wait_timeout::ChildExt;
-use crate::models::{DriveMetadata, FilesetMetadata, MediaFileRecord, ScanResult, ScanRootKind, ScanStats};
 
 #[derive(Debug, Clone)]
 pub struct ScanConfig {
     pub root: PathBuf,
     pub root_kind: ScanRootKind,
     pub hash_files: bool,
+    pub capture_snapshots: bool,
+    pub snapshots_per_video: u32,
 }
 
 impl ScanConfig {
@@ -32,6 +37,8 @@ impl ScanConfig {
             root: root.into(),
             root_kind: ScanRootKind::Folder,
             hash_files: true,
+            capture_snapshots: true,
+            snapshots_per_video: 3,
         }
     }
 }
@@ -206,7 +213,28 @@ where
             }
         }
 
-        store.upsert_file(&rec)?;
+        let file_id = store.upsert_file(&rec)?;
+        rec.file_id = Some(file_id);
+
+        if config.capture_snapshots && config.snapshots_per_video > 0 {
+            let (is_video, duration_ms) = rec
+                .ffmpeg_metadata
+                .as_deref()
+                .and_then(ffprobe_is_video_and_duration_ms)
+                .unwrap_or((false, None));
+
+            if is_video && duration_ms.is_some() {
+                let snapshots = video_snapshots_for_file(
+                    &path,
+                    duration_ms,
+                    config.snapshots_per_video,
+                    Duration::from_secs(30),
+                );
+                if let Some(snaps) = snapshots {
+                    let _ = store.replace_file_snapshots(file_id, &snaps);
+                }
+            }
+        }
 
         on_progress(&ScanProgress {
             files_seen: stats.files_seen,
@@ -273,6 +301,171 @@ fn ffprobe_metadata_inner(path: &Path) -> Option<String> {
         None => {
             let _ = child.kill();
             let _ = child.wait();
+            None
+        }
+    }
+}
+
+fn ffprobe_is_video_and_duration_ms(json: &str) -> Option<(bool, Option<i64>)> {
+    let v: Value = serde_json::from_str(json).ok()?;
+    let is_video = v
+        .get("streams")
+        .and_then(|s| s.as_array())
+        .map(|streams| {
+            streams.iter().any(|st| {
+                st.get("codec_type")
+                    .and_then(|t| t.as_str())
+                    .is_some_and(|t| t == "video")
+            })
+        })
+        .unwrap_or(false);
+
+    let duration_secs = v
+        .get("format")
+        .and_then(|f| f.get("duration"))
+        .and_then(|d| {
+            if let Some(s) = d.as_str() {
+                s.parse::<f64>().ok()
+            } else {
+                d.as_f64()
+            }
+        })
+        .filter(|d| d.is_finite() && *d > 0.0);
+
+    let duration_ms = duration_secs.map(|d| (d * 1000.0).round() as i64);
+    Some((is_video, duration_ms))
+}
+
+fn video_snapshots_for_file(
+    path: &Path,
+    duration_ms: Option<i64>,
+    snapshots_per_video: u32,
+    timeout: Duration,
+) -> Option<Vec<FileSnapshotRecord>> {
+    let duration_ms = duration_ms?;
+    let (tx, rx) = mpsc::channel();
+    let path = path.to_path_buf();
+
+    let inner_timeout = timeout.saturating_sub(Duration::from_secs(2));
+    thread::spawn(move || {
+        let result = std::panic::catch_unwind(|| {
+            video_snapshots_for_file_inner(&path, duration_ms, snapshots_per_video, inner_timeout)
+        })
+        .ok()
+        .flatten();
+        let _ = tx.send(result);
+    });
+
+    rx.recv_timeout(timeout).ok().flatten()
+}
+
+fn video_snapshots_for_file_inner(
+    path: &Path,
+    duration_ms: i64,
+    snapshots_per_video: u32,
+    timeout: Duration,
+) -> Option<Vec<FileSnapshotRecord>> {
+    if snapshots_per_video == 0 || duration_ms <= 0 {
+        return Some(Vec::new());
+    }
+
+    let deadline = Instant::now() + timeout;
+    let duration_secs = (duration_ms as f64) / 1000.0;
+
+    let mut snaps = Vec::with_capacity(snapshots_per_video as usize);
+    for idx in 0..snapshots_per_video {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining < Duration::from_millis(250) {
+            break;
+        }
+
+        let pos = ((idx + 1) as f64) / ((snapshots_per_video + 1) as f64);
+        let mut at_secs = duration_secs * pos;
+        if duration_secs > 2.0 {
+            at_secs = at_secs.clamp(0.5, duration_secs - 0.5);
+        } else {
+            at_secs = at_secs.clamp(0.0, duration_secs.max(0.0));
+        }
+
+        let per_snapshot_timeout = remaining.min(Duration::from_secs(10));
+        let image_avif = match ffmpeg_snapshot_avif_inner(path, at_secs, per_snapshot_timeout) {
+            Some(bytes) => bytes,
+            None => continue,
+        };
+
+        snaps.push(FileSnapshotRecord {
+            snapshot_index: idx,
+            snapshot_count: snapshots_per_video,
+            at_ms: (at_secs * 1000.0).round() as i64,
+            duration_ms: Some(duration_ms),
+            image_avif,
+        });
+    }
+
+    Some(snaps)
+}
+
+fn ffmpeg_snapshot_avif_inner(path: &Path, at_secs: f64, timeout: Duration) -> Option<Vec<u8>> {
+    let ts = format!("{at_secs:.3}");
+    let mut out_path = std::env::temp_dir();
+    let unique = format!(
+        "dupdupninja-snapshot-{}-{}.avif",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_nanos()
+    );
+    out_path.push(unique);
+
+    let mut child = Command::new("ffmpeg")
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-nostdin")
+        .arg("-ss")
+        .arg(ts)
+        .arg("-i")
+        .arg(path)
+        .arg("-map")
+        .arg("0:v:0")
+        .arg("-frames:v")
+        .arg("1")
+        .arg("-an")
+        .arg("-sn")
+        .arg("-dn")
+        .arg("-vf")
+        .arg("scale=1024:1024:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2")
+        .arg("-pix_fmt")
+        .arg("yuv420p")
+        .arg("-c:v")
+        .arg("libaom-av1")
+        .arg("-still-picture")
+        .arg("1")
+        .arg("-crf")
+        .arg("35")
+        .arg("-b:v")
+        .arg("0")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .arg(&out_path)
+        .spawn()
+        .ok()?;
+
+    match child.wait_timeout(timeout).ok()? {
+        Some(status) => {
+            if !status.success() {
+                let _ = std::fs::remove_file(&out_path);
+                return None;
+            }
+            let bytes = std::fs::read(&out_path).ok()?;
+            let _ = std::fs::remove_file(&out_path);
+            Some(bytes)
+        }
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = std::fs::remove_file(&out_path);
             None
         }
     }

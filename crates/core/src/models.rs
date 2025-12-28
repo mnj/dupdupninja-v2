@@ -27,6 +27,15 @@ pub struct MediaFileRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct FileSnapshotRecord {
+    pub snapshot_index: u32,
+    pub snapshot_count: u32,
+    pub at_ms: i64,
+    pub duration_ms: Option<i64>,
+    pub image_avif: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
 pub struct FilesetMetadata {
     pub created_at: SystemTime,
     pub root_kind: ScanRootKind,
