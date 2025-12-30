@@ -338,10 +338,19 @@ impl SqliteScanStore {
             r#"
             SELECT f1.{id_col} AS id, f1.path, f1.size_bytes, f1.blake3, f1.sha256, f1.file_type
             FROM files f1
-            WHERE f1.blake3 IS NOT NULL
-              AND EXISTS (
-                SELECT 1 FROM files f2
-                WHERE f2.blake3 = f1.blake3 AND f2.{id_col} != f1.{id_col}
+            WHERE (
+                f1.blake3 IS NOT NULL
+                AND EXISTS (
+                  SELECT 1 FROM files f2
+                  WHERE f2.blake3 = f1.blake3 AND f2.{id_col} != f1.{id_col}
+                )
+              ) OR (
+                f1.blake3 IS NULL
+                AND f1.sha256 IS NOT NULL
+                AND EXISTS (
+                  SELECT 1 FROM files f2
+                  WHERE f2.sha256 = f1.sha256 AND f2.{id_col} != f1.{id_col}
+                )
               )
             ORDER BY f1.path
             LIMIT ?1 OFFSET ?2
@@ -370,15 +379,23 @@ impl SqliteScanStore {
 
     pub fn list_direct_matches_by_blake3(&self, file_id: i64) -> Result<Vec<FileListRow>> {
         let id_col = self.file_id_column();
-        let blake3: Option<Vec<u8>> = self
+        let (blake3, sha256): (Option<Vec<u8>>, Option<Vec<u8>>) = match self
             .conn
             .query_row(
-                &format!(r#"SELECT blake3 FROM files WHERE {id_col} = ?1"#),
+                &format!(r#"SELECT blake3, sha256 FROM files WHERE {id_col} = ?1"#),
                 params![file_id],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
-            .optional()?;
-        let Some(blake3) = blake3 else {
+            .optional()?
+        {
+            Some(values) => values,
+            None => return Ok(Vec::new()),
+        };
+        let (hash, hash_col) = if let Some(hash) = blake3 {
+            (hash, "blake3")
+        } else if let Some(hash) = sha256 {
+            (hash, "sha256")
+        } else {
             return Ok(Vec::new());
         };
 
@@ -386,12 +403,12 @@ impl SqliteScanStore {
             r#"
             SELECT {id_col} AS id, path, size_bytes, blake3, sha256, file_type
             FROM files
-            WHERE blake3 = ?1 AND {id_col} != ?2
+            WHERE {hash_col} = ?1 AND {id_col} != ?2
             ORDER BY path
             "#
         );
         let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(params![blake3, file_id], |r| {
+        let rows = stmt.query_map(params![hash, file_id], |r| {
             let blake3: Option<Vec<u8>> = r.get(3)?;
             let sha256: Option<Vec<u8>> = r.get(4)?;
             Ok(FileListRow {
