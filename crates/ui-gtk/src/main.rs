@@ -1472,9 +1472,9 @@ fn build_files_column_view(
                     check.set_data("ddn-path", file.path.clone());
                 }
                 let selected = ui_state_for_bind
-                    .borrow()
-                    .as_ref()
-                    .map(|s| s.selected_files.contains_key(&file.id))
+                    .try_borrow()
+                    .ok()
+                    .and_then(|s| s.as_ref().map(|s| s.selected_files.contains_key(&file.id)))
                     .unwrap_or(false);
                 if let Some(setting) = unsafe {
                     check
