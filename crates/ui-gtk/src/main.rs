@@ -373,11 +373,66 @@ fn main() {
         let main_area = gtk::Box::new(gtk::Orientation::Vertical, 0);
         main_area.set_hexpand(true);
         main_area.set_vexpand(true);
+
         let placeholder = gtk::Label::new(Some("Select a fileset to view results."));
         placeholder.set_margin_top(18);
         placeholder.set_margin_start(18);
         placeholder.set_xalign(0.0);
-        main_area.append(&placeholder);
+
+        let files_db_path: std::rc::Rc<std::cell::RefCell<Option<std::path::PathBuf>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let files_root_store = gio::ListStore::new::<gtk4::glib::BoxedAnyObject>();
+        let files_db_path_for_model = files_db_path.clone();
+        let files_tree_model = gtk::TreeListModel::new(
+            files_root_store.clone(),
+            false,
+            false,
+            move |obj| {
+                let db_path = files_db_path_for_model.borrow().clone()?;
+                let row_item = obj
+                    .downcast_ref::<gtk4::glib::BoxedAnyObject>()?
+                    .borrow::<RowItem>()
+                    .clone();
+                match row_item.kind {
+                    RowKind::File(file) => {
+                        let store = dupdupninja_core::db::SqliteScanStore::open(&db_path).ok()?;
+                        let matches = store.list_direct_matches_by_blake3(file.id).ok()?;
+                        if matches.is_empty() {
+                            return None;
+                        }
+                        let list = gio::ListStore::new::<gtk4::glib::BoxedAnyObject>();
+                        list.append(&gtk4::glib::BoxedAnyObject::new(RowItem::match_group(
+                            format!("Direct matches ({})", matches.len()),
+                            matches,
+                        )));
+                        Some(list.upcast())
+                    }
+                    RowKind::MatchGroup { matches, .. } => {
+                        let list = gio::ListStore::new::<gtk4::glib::BoxedAnyObject>();
+                        for item in matches {
+                            list.append(&gtk4::glib::BoxedAnyObject::new(RowItem::match_item(item)));
+                        }
+                        Some(list.upcast())
+                    }
+                    RowKind::MatchItem(_) => None,
+                }
+            },
+        );
+
+        let files_selection = gtk::SingleSelection::new(Some(files_tree_model.clone()));
+        let files_view = build_files_column_view(&files_selection);
+        let files_scroll = gtk::ScrolledWindow::builder()
+            .child(&files_view)
+            .hscrollbar_policy(gtk::PolicyType::Automatic)
+            .vscrollbar_policy(gtk::PolicyType::Automatic)
+            .build();
+        attach_file_action_menu(&files_view, &files_selection, ui_state_for_activate.clone());
+
+        let files_stack = gtk::Stack::new();
+        files_stack.add_named(&placeholder, Some("placeholder"));
+        files_stack.add_named(&files_scroll, Some("files"));
+        files_stack.set_visible_child_name("placeholder");
+        main_area.append(&files_stack);
 
         content.append(&sidebar);
         content.append(&main_area);
@@ -420,11 +475,15 @@ fn main() {
             next_fileset_id: 1,
             active_fileset_id: None,
             fileset_placeholder: placeholder.clone(),
+            files_stack: files_stack.clone(),
+            files_root_store: files_root_store.clone(),
+            files_db_path: files_db_path.clone(),
             active_scan_fileset_id: None,
             scan_actions_enabled: true,
             capture_snapshots: true,
             snapshots_per_video: 3,
             snapshot_max_dim: 1024,
+            last_files_refresh: None,
         });
 
         restore_open_filesets(ui_state_for_activate.clone());
@@ -491,6 +550,29 @@ fn main() {
                                 state.progress.set_text(Some("Scanning..."));
                                 state.progress.pulse();
                             }
+                            if let (Some(active_id), Some(scan_id)) =
+                                (state.active_fileset_id, state.active_scan_fileset_id)
+                            {
+                                if active_id == scan_id {
+                                    let now = std::time::Instant::now();
+                                    let refresh = match state.last_files_refresh {
+                                        Some(last) => now.duration_since(last)
+                                            > std::time::Duration::from_secs(2),
+                                        None => true,
+                                    };
+                                    if refresh {
+                                        if let Some(entry) = state
+                                            .filesets
+                                            .iter()
+                                            .find(|entry| entry.id == active_id)
+                                        {
+                                            let db_path = entry.db_path.clone();
+                                            load_fileset_rows(state, &db_path);
+                                            state.last_files_refresh = Some(now);
+                                        }
+                                    }
+                                }
+                            }
                         }
                         UiUpdate::Done { text } => {
                             state.status_label.set_text(&text);
@@ -502,7 +584,16 @@ fn main() {
                             state.cancel_token = None;
                             state.total_files = 0;
                             state.total_bytes = 0;
+                            state.last_files_refresh = None;
                             set_scan_actions_enabled(state, true);
+                            if let Some(active_id) = state.active_fileset_id {
+                                if let Some(entry) =
+                                    state.filesets.iter().find(|entry| entry.id == active_id)
+                                {
+                                    let db_path = entry.db_path.clone();
+                                    load_fileset_rows(state, &db_path);
+                                }
+                            }
                             if let Some(fileset_id) = state.active_scan_fileset_id.take() {
                                 set_fileset_scanning(state, fileset_id, false);
                                 set_fileset_status(state, fileset_id, "completed");
@@ -521,6 +612,7 @@ fn main() {
                             state.cancel_token = None;
                             state.total_files = 0;
                             state.total_bytes = 0;
+                            state.last_files_refresh = None;
                             state.active_scan_fileset_id = None;
                             set_fileset_scanning(state, fileset_id, false);
                             set_fileset_status(state, fileset_id, "incomplete");
@@ -536,6 +628,7 @@ fn main() {
                             state.cancel_token = None;
                             state.total_files = 0;
                             state.total_bytes = 0;
+                            state.last_files_refresh = None;
                             set_scan_actions_enabled(state, true);
                             if let Some(fileset_id) = state.active_scan_fileset_id.take() {
                                 set_fileset_scanning(state, fileset_id, false);
@@ -573,11 +666,15 @@ struct UiState {
     next_fileset_id: u64,
     active_fileset_id: Option<u64>,
     fileset_placeholder: gtk4::Label,
+    files_stack: gtk4::Stack,
+    files_root_store: gtk4::gio::ListStore,
+    files_db_path: std::rc::Rc<std::cell::RefCell<Option<std::path::PathBuf>>>,
     active_scan_fileset_id: Option<u64>,
     scan_actions_enabled: bool,
     capture_snapshots: bool,
     snapshots_per_video: u32,
     snapshot_max_dim: u32,
+    last_files_refresh: Option<std::time::Instant>,
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]
@@ -1138,6 +1235,7 @@ fn remove_fileset_by_id(
 fn update_fileset_placeholder(state: &mut UiState) {
     if let Some(active_id) = state.active_fileset_id {
         if let Some(entry) = state.filesets.iter().find(|entry| entry.id == active_id) {
+            let db_path = entry.db_path.clone();
             let name = if entry.metadata.name.trim().is_empty() {
                 "Fileset"
             } else {
@@ -1146,12 +1244,523 @@ fn update_fileset_placeholder(state: &mut UiState) {
             state
                 .fileset_placeholder
                 .set_text(&format!("Active fileset: {}", name));
+            state.files_stack.set_visible_child_name("files");
+            *state.files_db_path.borrow_mut() = Some(db_path.clone());
+            load_fileset_rows(state, &db_path);
             return;
         }
     }
     state
         .fileset_placeholder
         .set_text("Select a fileset to view results.");
+    state.files_stack.set_visible_child_name("placeholder");
+    *state.files_db_path.borrow_mut() = None;
+    state.files_root_store.remove_all();
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn load_fileset_rows(state: &mut UiState, db_path: &std::path::Path) {
+    state.files_root_store.remove_all();
+    let store = match dupdupninja_core::db::SqliteScanStore::open(db_path) {
+        Ok(store) => store,
+        Err(err) => {
+            state
+                .status_label
+                .set_text(&format!("Status: Failed to open fileset: {err}"));
+            return;
+        }
+    };
+
+    let mut offset = 0;
+    let limit = 1000;
+    loop {
+        let rows = match store.list_files(limit, offset) {
+            Ok(rows) => rows,
+            Err(err) => {
+                state
+                    .status_label
+                    .set_text(&format!("Status: Failed to load files: {err}"));
+                break;
+            }
+        };
+        if rows.is_empty() {
+            break;
+        }
+        for row in rows {
+            state
+                .files_root_store
+                .append(&gtk4::glib::BoxedAnyObject::new(RowItem::from_file(row)));
+        }
+        offset += limit;
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+#[derive(Clone)]
+struct RowItem {
+    kind: RowKind,
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+#[derive(Clone)]
+enum RowKind {
+    File(FileRow),
+    MatchGroup { label: String, matches: Vec<FileRow> },
+    MatchItem(FileRow),
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+#[derive(Clone)]
+struct FileRow {
+    id: i64,
+    path: std::path::PathBuf,
+    size_bytes: u64,
+    blake3: Option<[u8; 32]>,
+    sha256: Option<[u8; 32]>,
+    file_type: Option<String>,
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+impl RowItem {
+    fn from_file(row: dupdupninja_core::models::FileListRow) -> Self {
+        Self {
+            kind: RowKind::File(FileRow::from(row)),
+        }
+    }
+
+    fn match_group(label: String, matches: Vec<dupdupninja_core::models::FileListRow>) -> Self {
+        Self {
+            kind: RowKind::MatchGroup {
+                label,
+                matches: matches.into_iter().map(FileRow::from).collect(),
+            },
+        }
+    }
+
+    fn match_item(row: FileRow) -> Self {
+        Self {
+            kind: RowKind::MatchItem(row),
+        }
+    }
+
+    fn label(&self) -> String {
+        match &self.kind {
+            RowKind::File(file) | RowKind::MatchItem(file) => file
+                .path
+                .file_name()
+                .and_then(|p| p.to_str())
+                .unwrap_or("(unknown)")
+                .to_string(),
+            RowKind::MatchGroup { label, .. } => label.clone(),
+        }
+    }
+
+    fn file_ref(&self) -> Option<&FileRow> {
+        match &self.kind {
+            RowKind::File(file) | RowKind::MatchItem(file) => Some(file),
+            RowKind::MatchGroup { .. } => None,
+        }
+    }
+
+    fn is_group(&self) -> bool {
+        matches!(self.kind, RowKind::MatchGroup { .. })
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+impl From<dupdupninja_core::models::FileListRow> for FileRow {
+    fn from(row: dupdupninja_core::models::FileListRow) -> Self {
+        Self {
+            id: row.id,
+            path: row.path,
+            size_bytes: row.size_bytes,
+            blake3: row.blake3,
+            sha256: row.sha256,
+            file_type: row.file_type,
+        }
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn build_files_column_view(selection: &gtk4::SingleSelection) -> gtk4::ColumnView {
+    use gtk4::prelude::*;
+    use gtk4::glib::prelude::Cast;
+    let column_view = gtk4::ColumnView::new(Some(selection.clone()));
+    column_view.set_hexpand(true);
+    column_view.set_vexpand(true);
+
+    let name_factory = gtk4::SignalListItemFactory::new();
+    name_factory.connect_setup(|_, item| {
+        let expander = gtk4::TreeExpander::new();
+        let label = gtk4::Label::new(None);
+        label.set_xalign(0.0);
+        label.set_hexpand(true);
+        expander.set_child(Some(&label));
+        item.downcast_ref::<gtk4::ListItem>()
+            .unwrap()
+            .set_child(Some(&expander));
+    });
+    name_factory.connect_bind(|_, item| {
+        let list_item = item.downcast_ref::<gtk4::ListItem>().unwrap();
+        let tree_row = list_item
+            .item()
+            .and_then(|o| o.downcast::<gtk4::TreeListRow>().ok());
+        let Some(tree_row) = tree_row else {
+            return;
+        };
+        let expander = list_item
+            .child()
+            .and_then(|c| c.downcast::<gtk4::TreeExpander>().ok())
+            .unwrap();
+        expander.set_list_row(Some(&tree_row));
+
+        let label = expander
+            .child()
+            .and_then(|c| c.downcast::<gtk4::Label>().ok())
+            .unwrap();
+        let row_item: Option<RowItem> = tree_row
+            .item()
+            .and_then(|o| o.downcast::<gtk4::glib::BoxedAnyObject>().ok())
+            .and_then(|o| o.try_borrow::<RowItem>().ok().map(|r| r.clone()));
+        if let Some(row_item) = row_item {
+            label.set_text(&row_item.label());
+            if row_item.is_group() {
+                label.add_css_class("dim-label");
+            } else {
+                label.remove_css_class("dim-label");
+            }
+        } else {
+            label.set_text("");
+        }
+    });
+
+    let name_column = gtk4::ColumnViewColumn::new(Some("Filename"), Some(name_factory));
+    name_column.set_resizable(true);
+    name_column.set_expand(true);
+    column_view.append_column(&name_column);
+
+    let size_column = make_text_column("Size", move |row| {
+        row.file_ref()
+            .map(|f| format_bytes(f.size_bytes))
+            .unwrap_or_default()
+    });
+    let type_column = make_text_column("File Type", move |row| {
+        row.file_ref()
+            .and_then(|f| f.file_type.clone())
+            .unwrap_or_default()
+    });
+    let blake3_column = make_text_column("Blake3", move |row| {
+        row.file_ref()
+            .and_then(|f| f.blake3.as_ref())
+            .map(hash_to_hex)
+            .unwrap_or_default()
+    });
+    let sha256_column = make_text_column("SHA-256", move |row| {
+        row.file_ref()
+            .and_then(|f| f.sha256.as_ref())
+            .map(hash_to_hex)
+            .unwrap_or_default()
+    });
+
+    column_view.append_column(&size_column);
+    column_view.append_column(&type_column);
+    column_view.append_column(&blake3_column);
+    column_view.append_column(&sha256_column);
+
+    attach_column_menu(&column_view, &[
+        ("Filename", name_column),
+        ("Size", size_column),
+        ("File Type", type_column),
+        ("Blake3", blake3_column),
+        ("SHA-256", sha256_column),
+    ]);
+
+    column_view
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn make_text_column<F>(title: &str, value: F) -> gtk4::ColumnViewColumn
+where
+    F: Fn(&RowItem) -> String + 'static,
+{
+    use gtk4::prelude::*;
+    use gtk4::glib::prelude::Cast;
+    let factory = gtk4::SignalListItemFactory::new();
+    factory.connect_setup(|_, item| {
+        let label = gtk4::Label::new(None);
+        label.set_xalign(0.0);
+        label.set_hexpand(true);
+        item.downcast_ref::<gtk4::ListItem>()
+            .unwrap()
+            .set_child(Some(&label));
+    });
+    factory.connect_bind(move |_, item| {
+        let list_item = item.downcast_ref::<gtk4::ListItem>().unwrap();
+        let label = list_item
+            .child()
+            .and_then(|c| c.downcast::<gtk4::Label>().ok())
+            .unwrap();
+        let tree_row = list_item
+            .item()
+            .and_then(|o| o.downcast::<gtk4::TreeListRow>().ok());
+        let row_item: Option<RowItem> = tree_row
+            .and_then(|row| row.item())
+            .and_then(|o| o.downcast::<gtk4::glib::BoxedAnyObject>().ok())
+            .and_then(|o| o.try_borrow::<RowItem>().ok().map(|r| r.clone()));
+
+        if let Some(row_item) = row_item {
+            label.set_text(&value(&row_item));
+        } else {
+            label.set_text("");
+        }
+    });
+
+    let column = gtk4::ColumnViewColumn::new(Some(title), Some(factory));
+    column.set_resizable(true);
+    column
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn attach_column_menu(column_view: &gtk4::ColumnView, columns: &[(&str, gtk4::ColumnViewColumn)]) {
+    use gtk4::prelude::*;
+    let popover = gtk4::Popover::new();
+    popover.set_autohide(true);
+    popover.set_has_arrow(false);
+    popover.set_parent(column_view);
+
+    let content = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+    content.set_margin_top(8);
+    content.set_margin_bottom(8);
+    content.set_margin_start(8);
+    content.set_margin_end(8);
+
+    for (label, column) in columns {
+        let checkbox = gtk4::CheckButton::with_label(label);
+        checkbox.set_active(column.is_visible());
+        let column = column.clone();
+        checkbox.connect_toggled(move |cb| {
+            column.set_visible(cb.is_active());
+        });
+        content.append(&checkbox);
+    }
+
+    popover.set_child(Some(&content));
+
+    let click = gtk4::GestureClick::builder().button(3).build();
+    let popover_for_click = popover.clone();
+    click.connect_pressed(move |gesture, _, x, y| {
+        let rect = gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
+        popover_for_click.set_pointing_to(Some(&rect));
+        popover_for_click.popup();
+        gesture.set_state(gtk4::EventSequenceState::Claimed);
+    });
+    column_view.add_controller(click);
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn format_bytes(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let b = bytes as f64;
+    if b >= GB {
+        format!("{:.2} GB", b / GB)
+    } else if b >= MB {
+        format!("{:.2} MB", b / MB)
+    } else if b >= KB {
+        format!("{:.2} KB", b / KB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn hash_to_hex(hash: &[u8; 32]) -> String {
+    let mut out = String::with_capacity(64);
+    for b in hash {
+        use std::fmt::Write;
+        let _ = write!(&mut out, "{:02x}", b);
+    }
+    out
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn attach_file_action_menu(
+    column_view: &gtk4::ColumnView,
+    selection: &gtk4::SingleSelection,
+    ui_state: std::rc::Rc<std::cell::RefCell<Option<UiState>>>,
+) {
+    use gtk4::prelude::*;
+    let popover = gtk4::Popover::new();
+    popover.set_autohide(true);
+    popover.set_has_arrow(false);
+    popover.set_parent(column_view);
+
+    let content = gtk4::Box::new(gtk4::Orientation::Vertical, 8);
+    content.set_margin_top(8);
+    content.set_margin_bottom(8);
+    content.set_margin_start(8);
+    content.set_margin_end(8);
+
+    let trash_button = gtk4::Button::with_label("Move to Trash");
+    let delete_button = gtk4::Button::with_label("Delete Permanently");
+    let copy_button = gtk4::Button::with_label("Copy to...");
+    let move_button = gtk4::Button::with_label("Move to...");
+
+    content.append(&trash_button);
+    content.append(&delete_button);
+    content.append(&copy_button);
+    content.append(&move_button);
+    popover.set_child(Some(&content));
+
+    let selection_for_actions = selection.clone();
+    let trash_button_for_update = trash_button.clone();
+    let delete_button_for_update = delete_button.clone();
+    let copy_button_for_update = copy_button.clone();
+    let move_button_for_update = move_button.clone();
+    let update_buttons = move || {
+        let row_item = selected_row_item(&selection_for_actions);
+        let enable = row_item.and_then(|r| r.file_ref().cloned()).is_some();
+        trash_button_for_update.set_sensitive(enable);
+        delete_button_for_update.set_sensitive(enable);
+        copy_button_for_update.set_sensitive(enable);
+        move_button_for_update.set_sensitive(enable);
+    };
+
+    let selection_for_actions = selection.clone();
+    let ui_state_for_actions = ui_state.clone();
+    trash_button.connect_clicked(move |_| {
+        if let Some(path) = selected_file_path(&ui_state_for_actions, &selection_for_actions) {
+            let file = gtk4::gio::File::for_path(path);
+            let result = file
+                .trash(None::<&gtk4::gio::Cancellable>)
+                .map(|_| "Moved to Trash".to_string())
+                .map_err(|e| e.to_string());
+            update_status(&ui_state_for_actions, result);
+        }
+    });
+
+    let selection_for_actions = selection.clone();
+    let ui_state_for_actions = ui_state.clone();
+    delete_button.connect_clicked(move |_| {
+        if let Some(path) = selected_file_path(&ui_state_for_actions, &selection_for_actions) {
+            let result = std::fs::remove_file(&path)
+                .map(|_| "Deleted permanently".to_string())
+                .map_err(|e| e.to_string());
+            update_status(&ui_state_for_actions, result);
+        }
+    });
+
+    let selection_for_actions = selection.clone();
+    let ui_state_for_actions = ui_state.clone();
+    copy_button.connect_clicked(move |_| {
+        let ui_state_for_dialog = ui_state_for_actions.clone();
+        let selection_for_dialog = selection_for_actions.clone();
+        if let Some(window) = active_window(&ui_state_for_dialog) {
+            let dialog = gtk4::FileDialog::new();
+            dialog.set_title("Copy to folder");
+            dialog.select_folder(Some(&window), None::<&gtk4::gio::Cancellable>, move |res| {
+                if let Ok(dest) = res {
+                    if let Some(path) = selected_file_path(&ui_state_for_dialog, &selection_for_dialog) {
+                        if let Some(folder) = dest.path() {
+                            let file_name = path.file_name().unwrap_or_default().to_os_string();
+                            let target = folder.join(file_name);
+                            let result = std::fs::copy(&path, &target)
+                                .map(|_| "Copied file".to_string())
+                                .map_err(|e| e.to_string());
+                            update_status(&ui_state_for_dialog, result);
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    let selection_for_actions = selection.clone();
+    let ui_state_for_actions = ui_state.clone();
+    move_button.connect_clicked(move |_| {
+        let ui_state_for_dialog = ui_state_for_actions.clone();
+        let selection_for_dialog = selection_for_actions.clone();
+        if let Some(window) = active_window(&ui_state_for_dialog) {
+            let dialog = gtk4::FileDialog::new();
+            dialog.set_title("Move to folder");
+            dialog.select_folder(Some(&window), None::<&gtk4::gio::Cancellable>, move |res| {
+                if let Ok(dest) = res {
+                    if let Some(path) = selected_file_path(&ui_state_for_dialog, &selection_for_dialog) {
+                        if let Some(folder) = dest.path() {
+                            let file_name = path.file_name().unwrap_or_default().to_os_string();
+                            let target = folder.join(file_name);
+                            let result = std::fs::rename(&path, &target)
+                                .map(|_| "Moved file".to_string())
+                                .map_err(|e| e.to_string());
+                            update_status(&ui_state_for_dialog, result);
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    let click = gtk4::GestureClick::builder().button(3).build();
+    let popover_for_click = popover.clone();
+    click.connect_pressed(move |gesture, _, x, y| {
+        update_buttons();
+        let rect = gtk4::gdk::Rectangle::new(x as i32, y as i32, 1, 1);
+        popover_for_click.set_pointing_to(Some(&rect));
+        popover_for_click.popup();
+        gesture.set_state(gtk4::EventSequenceState::Claimed);
+    });
+    column_view.add_controller(click);
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn selected_row_item(selection: &gtk4::SingleSelection) -> Option<RowItem> {
+    use gtk4::glib::prelude::Cast;
+    let item = selection.selected_item()?;
+    let tree_row = item.downcast::<gtk4::TreeListRow>().ok()?;
+    let boxed = tree_row.item()?.downcast::<gtk4::glib::BoxedAnyObject>().ok()?;
+    boxed.try_borrow::<RowItem>().ok().map(|r| r.clone())
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn selected_file_path(
+    ui_state: &std::rc::Rc<std::cell::RefCell<Option<UiState>>>,
+    selection: &gtk4::SingleSelection,
+) -> Option<std::path::PathBuf> {
+    let row_item = selected_row_item(selection)?;
+    let file = row_item.file_ref()?;
+    let state = ui_state.borrow();
+    let state = state.as_ref()?;
+    let active_id = state.active_fileset_id?;
+    let entry = state.filesets.iter().find(|entry| entry.id == active_id)?;
+    Some(entry.metadata.root_path.join(&file.path))
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn active_window(
+    ui_state: &std::rc::Rc<std::cell::RefCell<Option<UiState>>>,
+) -> Option<gtk4::Window> {
+    use gtk4::glib::prelude::Cast;
+    let state = ui_state.borrow();
+    let _ = state.as_ref()?;
+    gtk4::Window::list_toplevels()
+        .into_iter()
+        .find_map(|w| w.downcast::<gtk4::Window>().ok())
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn update_status(
+    ui_state: &std::rc::Rc<std::cell::RefCell<Option<UiState>>>,
+    result: std::result::Result<String, String>,
+) {
+    let mut state = ui_state.borrow_mut();
+    let Some(state) = state.as_mut() else {
+        return;
+    };
+    match result {
+        Ok(msg) => state.status_label.set_text(&format!("Status: {msg}")),
+        Err(err) => state.status_label.set_text(&format!("Status: {err}")),
+    }
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]

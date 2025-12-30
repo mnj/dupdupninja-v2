@@ -36,6 +36,16 @@ pub struct FileSnapshotRecord {
 }
 
 #[derive(Debug, Clone)]
+pub struct FileListRow {
+    pub id: i64,
+    pub path: PathBuf,
+    pub size_bytes: u64,
+    pub blake3: Option<[u8; 32]>,
+    pub sha256: Option<[u8; 32]>,
+    pub file_type: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct FilesetMetadata {
     pub created_at: SystemTime,
     pub root_kind: ScanRootKind,

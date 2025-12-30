@@ -4,7 +4,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::error::Result;
-use crate::models::{DriveMetadata, FileSnapshotRecord, FilesetMetadata, MediaFileRecord, ScanRootKind};
+use crate::models::{
+    DriveMetadata, FileListRow, FileSnapshotRecord, FilesetMetadata, MediaFileRecord, ScanRootKind,
+};
 
 pub struct SqliteScanStore {
     conn: Connection,
@@ -270,6 +272,86 @@ impl SqliteScanStore {
             .query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))?;
         Ok(count.max(0) as u64)
     }
+
+    pub fn list_files(&self, limit: usize, offset: usize) -> Result<Vec<FileListRow>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, path, size_bytes, blake3, sha256, file_type
+            FROM files
+            ORDER BY path
+            LIMIT ?1 OFFSET ?2
+            "#,
+        )?;
+        let rows = stmt.query_map(params![limit as i64, offset as i64], |r| {
+            let blake3: Option<Vec<u8>> = r.get(3)?;
+            let sha256: Option<Vec<u8>> = r.get(4)?;
+            Ok(FileListRow {
+                id: r.get(0)?,
+                path: Path::new(r.get::<_, String>(1)?.as_str()).to_path_buf(),
+                size_bytes: r.get::<_, i64>(2)? as u64,
+                blake3: blob_to_hash(blake3),
+                sha256: blob_to_hash(sha256),
+                file_type: r.get(5)?,
+            })
+        })?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn list_direct_matches_by_blake3(&self, file_id: i64) -> Result<Vec<FileListRow>> {
+        let blake3: Option<Vec<u8>> = self
+            .conn
+            .query_row(
+                r#"SELECT blake3 FROM files WHERE id = ?1"#,
+                params![file_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let Some(blake3) = blake3 else {
+            return Ok(Vec::new());
+        };
+
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT id, path, size_bytes, blake3, sha256, file_type
+            FROM files
+            WHERE blake3 = ?1 AND id != ?2
+            ORDER BY path
+            "#,
+        )?;
+        let rows = stmt.query_map(params![blake3, file_id], |r| {
+            let blake3: Option<Vec<u8>> = r.get(3)?;
+            let sha256: Option<Vec<u8>> = r.get(4)?;
+            Ok(FileListRow {
+                id: r.get(0)?,
+                path: Path::new(r.get::<_, String>(1)?.as_str()).to_path_buf(),
+                size_bytes: r.get::<_, i64>(2)? as u64,
+                blake3: blob_to_hash(blake3),
+                sha256: blob_to_hash(sha256),
+                file_type: r.get(5)?,
+            })
+        })?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+}
+
+fn blob_to_hash(blob: Option<Vec<u8>>) -> Option<[u8; 32]> {
+    let bytes = blob?;
+    if bytes.len() != 32 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&bytes);
+    Some(out)
 }
 
 fn system_time_to_secs(t: SystemTime) -> u64 {
