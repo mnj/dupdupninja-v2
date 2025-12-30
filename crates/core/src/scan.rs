@@ -219,11 +219,11 @@ where
         rec.file_id = Some(file_id);
 
         if config.capture_snapshots && config.snapshots_per_video > 0 {
-            let (is_video, duration_ms) = rec
+            let is_video = is_video_file(&path, rec.file_type.as_deref());
+            let duration_ms = rec
                 .ffmpeg_metadata
                 .as_deref()
-                .and_then(ffprobe_is_video_and_duration_ms)
-                .unwrap_or((false, None));
+                .and_then(ffprobe_duration_ms);
 
             if is_video && duration_ms.is_some() {
                 let snapshots = video_snapshots_for_file(
@@ -309,20 +309,8 @@ fn ffprobe_metadata_inner(path: &Path) -> Option<String> {
     }
 }
 
-fn ffprobe_is_video_and_duration_ms(json: &str) -> Option<(bool, Option<i64>)> {
+fn ffprobe_duration_ms(json: &str) -> Option<i64> {
     let v: Value = serde_json::from_str(json).ok()?;
-    let is_video = v
-        .get("streams")
-        .and_then(|s| s.as_array())
-        .map(|streams| {
-            streams.iter().any(|st| {
-                st.get("codec_type")
-                    .and_then(|t| t.as_str())
-                    .is_some_and(|t| t == "video")
-            })
-        })
-        .unwrap_or(false);
-
     let duration_secs = v
         .get("format")
         .and_then(|f| f.get("duration"))
@@ -335,8 +323,43 @@ fn ffprobe_is_video_and_duration_ms(json: &str) -> Option<(bool, Option<i64>)> {
         })
         .filter(|d| d.is_finite() && *d > 0.0);
 
-    let duration_ms = duration_secs.map(|d| (d * 1000.0).round() as i64);
-    Some((is_video, duration_ms))
+    duration_secs.map(|d| (d * 1000.0).round() as i64)
+}
+
+fn is_video_file(path: &Path, file_type: Option<&str>) -> bool {
+    if let Some(mime) = file_type {
+        if mime.starts_with("video/") {
+            return true;
+        }
+    }
+
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase());
+
+    matches!(
+        ext.as_deref(),
+        Some("mp4")
+            | Some("m4v")
+            | Some("mov")
+            | Some("mkv")
+            | Some("webm")
+            | Some("avi")
+            | Some("mpeg")
+            | Some("mpg")
+            | Some("mpe")
+            | Some("ts")
+            | Some("mts")
+            | Some("m2ts")
+            | Some("3gp")
+            | Some("3g2")
+            | Some("wmv")
+            | Some("flv")
+            | Some("f4v")
+            | Some("ogv")
+            | Some("mxf")
+    )
 }
 
 fn video_snapshots_for_file(
