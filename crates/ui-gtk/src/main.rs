@@ -490,6 +490,7 @@ fn main() {
             selected_files: std::collections::HashMap::new(),
             action_bar_label: action_bar.label.clone(),
             action_bar_buttons: action_bar.buttons.clone(),
+            show_only_duplicates: false,
         });
 
         restore_open_filesets(ui_state_for_activate.clone());
@@ -684,6 +685,7 @@ struct UiState {
     selected_files: std::collections::HashMap<i64, std::path::PathBuf>,
     action_bar_label: gtk4::Label,
     action_bar_buttons: FileActionButtons,
+    show_only_duplicates: bool,
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]
@@ -1285,7 +1287,11 @@ fn load_fileset_rows(state: &mut UiState, db_path: &std::path::Path) {
     let mut offset = 0;
     let limit = 1000;
     loop {
-        let rows = match store.list_files(limit, offset) {
+        let rows = match if state.show_only_duplicates {
+            store.list_files_with_duplicates(limit, offset)
+        } else {
+            store.list_files(limit, offset)
+        } {
             Ok(rows) => rows,
             Err(err) => {
                 state
@@ -1379,6 +1385,10 @@ impl RowItem {
     fn is_group(&self) -> bool {
         matches!(self.kind, RowKind::MatchGroup { .. })
     }
+
+    fn is_match_item(&self) -> bool {
+        matches!(self.kind, RowKind::MatchItem(_))
+    }
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]
@@ -1464,39 +1474,38 @@ fn build_files_column_view(
             .and_then(|o| o.try_borrow::<RowItem>().ok().map(|r| r.clone()));
 
         if let Some(row_item) = row_item {
-            if let Some(file) = row_item.file_ref() {
-                check.set_visible(true);
-                check.set_sensitive(true);
-                unsafe {
-                    check.set_data("ddn-file-id", file.id);
-                    check.set_data("ddn-path", file.path.clone());
+            if row_item.is_match_item() {
+                if let Some(file) = row_item.file_ref() {
+                    check.set_visible(true);
+                    check.set_sensitive(true);
+                    unsafe {
+                        check.set_data("ddn-file-id", file.id);
+                        check.set_data("ddn-path", file.path.clone());
+                    }
+                    let selected = ui_state_for_bind
+                        .try_borrow()
+                        .ok()
+                        .and_then(|s| s.as_ref().map(|s| s.selected_files.contains_key(&file.id)))
+                        .unwrap_or(false);
+                    if let Some(setting) = unsafe {
+                        check
+                            .data::<std::rc::Rc<std::cell::Cell<bool>>>("ddn-setting")
+                            .map(|v| v.as_ref().clone())
+                    } {
+                        setting.set(true);
+                        check.set_active(selected);
+                        setting.set(false);
+                    } else {
+                        check.set_active(selected);
+                    }
+                    return;
                 }
-                let selected = ui_state_for_bind
-                    .try_borrow()
-                    .ok()
-                    .and_then(|s| s.as_ref().map(|s| s.selected_files.contains_key(&file.id)))
-                    .unwrap_or(false);
-                if let Some(setting) = unsafe {
-                    check
-                        .data::<std::rc::Rc<std::cell::Cell<bool>>>("ddn-setting")
-                        .map(|v| v.as_ref().clone())
-                } {
-                    setting.set(true);
-                    check.set_active(selected);
-                    setting.set(false);
-                } else {
-                    check.set_active(selected);
-                }
-            } else {
-                check.set_visible(false);
-                check.set_sensitive(false);
-                check.set_active(false);
             }
-        } else {
-            check.set_visible(false);
-            check.set_sensitive(false);
-            check.set_active(false);
         }
+
+        check.set_visible(false);
+        check.set_sensitive(false);
+        check.set_active(false);
     });
     let check_column = gtk4::ColumnViewColumn::new(Some(""), Some(check_factory));
     check_column.set_fixed_width(36);
@@ -1757,12 +1766,15 @@ fn build_file_action_bar(
     label.set_xalign(0.0);
     label.set_hexpand(true);
 
+    let show_duplicates = gtk4::CheckButton::with_label("Show only duplicates");
+
     let trash = gtk4::Button::with_label("Move to Trash");
     let delete = gtk4::Button::with_label("Delete Permanently");
     let copy = gtk4::Button::with_label("Copy to...");
     let move_to = gtk4::Button::with_label("Move to...");
 
     bar.append(&label);
+    bar.append(&show_duplicates);
     bar.append(&trash);
     bar.append(&delete);
     bar.append(&copy);
@@ -1835,6 +1847,21 @@ fn build_file_action_bar(
                     }
                 }
             });
+        }
+    });
+
+    let ui_state_for_toggle = ui_state.clone();
+    show_duplicates.connect_toggled(move |cb| {
+        let mut state = ui_state_for_toggle.borrow_mut();
+        let Some(state) = state.as_mut() else {
+            return;
+        };
+        state.show_only_duplicates = cb.is_active();
+        if let Some(active_id) = state.active_fileset_id {
+            if let Some(entry) = state.filesets.iter().find(|entry| entry.id == active_id) {
+                let db_path = entry.db_path.clone();
+                load_fileset_rows(state, &db_path);
+            }
         }
     });
 

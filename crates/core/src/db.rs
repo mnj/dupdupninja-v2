@@ -302,6 +302,40 @@ impl SqliteScanStore {
         Ok(out)
     }
 
+    pub fn list_files_with_duplicates(&self, limit: usize, offset: usize) -> Result<Vec<FileListRow>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT f1.id, f1.path, f1.size_bytes, f1.blake3, f1.sha256, f1.file_type
+            FROM files f1
+            WHERE f1.blake3 IS NOT NULL
+              AND EXISTS (
+                SELECT 1 FROM files f2
+                WHERE f2.blake3 = f1.blake3 AND f2.id != f1.id
+              )
+            ORDER BY f1.path
+            LIMIT ?1 OFFSET ?2
+            "#,
+        )?;
+        let rows = stmt.query_map(params![limit as i64, offset as i64], |r| {
+            let blake3: Option<Vec<u8>> = r.get(3)?;
+            let sha256: Option<Vec<u8>> = r.get(4)?;
+            Ok(FileListRow {
+                id: r.get(0)?,
+                path: Path::new(r.get::<_, String>(1)?.as_str()).to_path_buf(),
+                size_bytes: r.get::<_, i64>(2)? as u64,
+                blake3: blob_to_hash(blake3),
+                sha256: blob_to_hash(sha256),
+                file_type: r.get(5)?,
+            })
+        })?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     pub fn list_direct_matches_by_blake3(&self, file_id: i64) -> Result<Vec<FileListRow>> {
         let blake3: Option<Vec<u8>> = self
             .conn
