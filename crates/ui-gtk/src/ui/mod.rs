@@ -2,7 +2,7 @@ mod files_list;
 mod state;
 
 use files_list::*;
-use state::{UiState, UiUpdate};
+use state::{FilesetEntry, UiState, UiUpdate};
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]
 pub fn run() {
@@ -873,16 +873,6 @@ fn sanitize_fileset_name(root: &std::path::Path) -> String {
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]
-struct FilesetEntry {
-    id: u64,
-    db_path: std::path::PathBuf,
-    normalized_path: std::path::PathBuf,
-    action_row: adw::ActionRow,
-    row: gtk4::ListBoxRow,
-    metadata: dupdupninja_core::FilesetMetadata,
-}
-
-#[cfg(all(target_os = "linux", feature = "gtk"))]
 fn add_fileset(
     ui_state: std::rc::Rc<std::cell::RefCell<Option<UiState>>>,
     name: String,
@@ -1280,4 +1270,487 @@ fn load_fileset_rows(state: &mut UiState, db_path: &std::path::Path) {
 
     state.selected_files.clear();
     update_action_bar_state(state);
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn open_fileset_properties(
+    ui_state: std::rc::Rc<std::cell::RefCell<Option<UiState>>>,
+    fileset_id: u64,
+    window: &gtk4::Window,
+) {
+    use adw::prelude::*;
+
+    let (db_path, current_meta, total_files) = {
+        let state = ui_state.borrow();
+        let Some(state) = state.as_ref() else {
+            return;
+        };
+        let entry = match state.filesets.iter().find(|entry| entry.id == fileset_id) {
+            Some(entry) => entry,
+            None => return,
+        };
+        let total_files = dupdupninja_core::db::SqliteScanStore::open(&entry.db_path)
+            .ok()
+            .and_then(|store| store.count_files().ok())
+            .unwrap_or(0);
+        (entry.db_path.clone(), entry.metadata.clone(), total_files)
+    };
+
+    let content = gtk4::Box::new(gtk4::Orientation::Vertical, 12);
+    content.set_margin_top(12);
+    content.set_margin_bottom(12);
+    content.set_margin_start(12);
+    content.set_margin_end(12);
+
+    let title = gtk4::Label::new(Some("Fileset Properties"));
+    title.add_css_class("title-3");
+    title.set_xalign(0.0);
+    content.append(&title);
+
+    let name_label = gtk4::Label::new(Some("Name"));
+    name_label.set_xalign(0.0);
+    name_label.add_css_class("dim-label");
+    content.append(&name_label);
+    let name_entry = gtk4::Entry::new();
+    name_entry.set_text(&current_meta.name);
+    content.append(&name_entry);
+
+    let description_label = gtk4::Label::new(Some("Description"));
+    description_label.set_xalign(0.0);
+    description_label.add_css_class("dim-label");
+    content.append(&description_label);
+    let description_entry = gtk4::Entry::new();
+    description_entry.set_text(&current_meta.description);
+    content.append(&description_entry);
+
+    let notes_label = gtk4::Label::new(Some("Notes"));
+    notes_label.set_xalign(0.0);
+    notes_label.add_css_class("dim-label");
+    content.append(&notes_label);
+    let notes_view = gtk4::TextView::new();
+    notes_view.set_wrap_mode(gtk4::WrapMode::WordChar);
+    let buffer = notes_view.buffer();
+    buffer.set_text(&current_meta.notes);
+    let notes_scroller = gtk4::ScrolledWindow::new();
+    notes_scroller.set_min_content_height(120);
+    notes_scroller.set_vexpand(true);
+    notes_scroller.set_child(Some(&notes_view));
+    content.append(&notes_scroller);
+
+    let total_label = gtk4::Label::new(Some("Total files"));
+    total_label.set_xalign(0.0);
+    total_label.add_css_class("dim-label");
+    content.append(&total_label);
+    let total_value = gtk4::Label::new(Some(&total_files.to_string()));
+    total_value.set_xalign(0.0);
+    content.append(&total_value);
+
+    let button_row = gtk4::Box::new(gtk4::Orientation::Horizontal, 8);
+    button_row.set_halign(gtk4::Align::End);
+    let cancel_button = gtk4::Button::with_label("Cancel");
+    let save_button = gtk4::Button::with_label("Save");
+    save_button.add_css_class("suggested-action");
+    button_row.append(&cancel_button);
+    button_row.append(&save_button);
+    content.append(&button_row);
+
+    let dialog = adw::Dialog::builder()
+        .content_width(520)
+        .content_height(360)
+        .child(&content)
+        .build();
+
+    let ui_state_for_save = ui_state.clone();
+    let dialog_for_save = dialog.clone();
+    save_button.connect_clicked(move |_| {
+        let mut name = name_entry.text().to_string();
+        if name.trim().is_empty() {
+            name = "Fileset".to_string();
+        } else {
+            name = name.trim().to_string();
+        }
+        let description = description_entry.text().trim().to_string();
+        let buffer = notes_view.buffer();
+        let notes = buffer
+            .text(&buffer.start_iter(), &buffer.end_iter(), true)
+            .trim()
+            .to_string();
+
+        let meta = dupdupninja_core::FilesetMetadata {
+            name,
+            description,
+            notes,
+            ..current_meta.clone()
+        };
+
+        if let Ok(store) = dupdupninja_core::db::SqliteScanStore::open(&db_path) {
+            let _ = store.set_fileset_metadata(&meta);
+        }
+
+        if let Some(state) = ui_state_for_save.borrow_mut().as_mut() {
+            if let Some(entry) = state.filesets.iter_mut().find(|entry| entry.id == fileset_id) {
+                entry.metadata = meta;
+                apply_fileset_metadata(&entry.action_row, &entry.metadata);
+                if state.active_fileset_id == Some(fileset_id) {
+                    update_fileset_placeholder(state);
+                }
+            }
+        }
+        let _ = dialog_for_save.close();
+    });
+
+    let dialog_for_cancel = dialog.clone();
+    cancel_button.connect_clicked(move |_| {
+        let _ = dialog_for_cancel.close();
+    });
+
+    dialog.present(Some(window));
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn select_mount_path<F>(window: &gtk4::Window, on_selected: F)
+where
+    F: Fn(Option<std::path::PathBuf>) + 'static,
+{
+    use adw::prelude::*;
+    use gtk4 as gtk;
+    use gtk::gio;
+
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    content.set_margin_top(12);
+    content.set_margin_bottom(12);
+    content.set_margin_start(12);
+    content.set_margin_end(12);
+
+    let title = gtk::Label::new(Some("Select a disk/mount to scan"));
+    title.add_css_class("title-4");
+    title.set_xalign(0.0);
+    content.append(&title);
+
+    let list = gtk::ListBox::new();
+    list.set_selection_mode(gtk::SelectionMode::Single);
+    list.add_css_class("boxed-list");
+    let scroller = gtk::ScrolledWindow::new();
+    scroller.set_child(Some(&list));
+    scroller.set_vexpand(true);
+    content.append(&scroller);
+
+    let mut entries = mount_entries_from_proc();
+    if entries.is_empty() {
+        let monitor = gio::VolumeMonitor::get();
+        for mount in monitor.mounts() {
+            let root = mount.root();
+            let path = match root.path() {
+                Some(path) => path,
+                None => continue,
+            };
+            let title = mount.name().to_string();
+            let subtitle = format!("{}", path.display());
+            let detail = mount_detail("", &path.display().to_string());
+            entries.push(MountEntry {
+                title,
+                subtitle,
+                detail,
+                icon_name: "drive-harddisk-symbolic",
+                path,
+            });
+        }
+    }
+
+    for entry in entries {
+        let row = gtk::ListBoxRow::new();
+        let row_box = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        row_box.set_margin_top(6);
+        row_box.set_margin_bottom(6);
+        row_box.set_margin_start(10);
+        row_box.set_margin_end(10);
+
+        let icon = gtk::Image::from_icon_name(entry.icon_name);
+        icon.set_pixel_size(20);
+        row_box.append(&icon);
+
+        let text_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        let title = gtk::Label::new(Some(&entry.title));
+        title.set_xalign(0.0);
+        let subtitle = gtk::Label::new(Some(&entry.subtitle));
+        subtitle.set_xalign(0.0);
+        subtitle.add_css_class("dim-label");
+        let detail = gtk::Label::new(Some(&entry.detail));
+        detail.set_xalign(0.0);
+        detail.add_css_class("dim-label");
+        text_box.append(&title);
+        text_box.append(&subtitle);
+        text_box.append(&detail);
+        row_box.append(&text_box);
+
+        row.set_child(Some(&row_box));
+        row.set_activatable(true);
+        row.set_selectable(true);
+        unsafe {
+            row.set_data("mount-path", entry.path);
+        }
+        list.append(&row);
+    }
+
+    let button_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    button_row.set_halign(gtk::Align::End);
+    let cancel_button = gtk::Button::with_label("Cancel");
+    let select_button = gtk::Button::with_label("Select");
+    select_button.add_css_class("suggested-action");
+    select_button.set_sensitive(false);
+    button_row.append(&cancel_button);
+    button_row.append(&select_button);
+    content.append(&button_row);
+
+    let dialog = adw::Dialog::builder()
+        .content_width(520)
+        .content_height(360)
+        .child(&content)
+        .build();
+
+    let callback = std::rc::Rc::new(std::cell::RefCell::new(Some(Box::new(on_selected))));
+
+    let callback_for_select = callback.clone();
+    let list_for_select = list.clone();
+    let dialog_for_select = dialog.clone();
+    select_button.connect_clicked(move |_| {
+        let selection = list_for_select.selected_row().and_then(|row| unsafe {
+            row.data::<std::path::PathBuf>("mount-path")
+                .map(|p| p.as_ref().clone())
+        });
+        if let Some(callback) = callback_for_select.borrow_mut().take() {
+            callback(selection);
+        }
+        let _ = dialog_for_select.close();
+    });
+
+    let callback_for_cancel = callback.clone();
+    let dialog_for_cancel = dialog.clone();
+    cancel_button.connect_clicked(move |_| {
+        if let Some(callback) = callback_for_cancel.borrow_mut().take() {
+            callback(None);
+        }
+        let _ = dialog_for_cancel.close();
+    });
+
+    let select_button_for_row = select_button.clone();
+    list.connect_row_selected(move |_, row| {
+        select_button_for_row.set_sensitive(row.is_some());
+    });
+
+    let callback_for_closed = callback.clone();
+    dialog.connect_closed(move |_| {
+        if let Some(callback) = callback_for_closed.borrow_mut().take() {
+            callback(None);
+        }
+    });
+
+    dialog.present(Some(window));
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+struct MountEntry {
+    title: String,
+    subtitle: String,
+    detail: String,
+    icon_name: &'static str,
+    path: std::path::PathBuf,
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn mount_entries_from_proc() -> Vec<MountEntry> {
+    use std::collections::BTreeMap;
+    use std::fs;
+    use std::path::PathBuf;
+
+    let contents = match fs::read_to_string("/proc/self/mountinfo") {
+        Ok(contents) => contents,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut entries: BTreeMap<PathBuf, (String, String, String, &'static str)> = BTreeMap::new();
+    for line in contents.lines() {
+        let mut parts = line.split(" - ");
+        let left = match parts.next() {
+            Some(left) => left,
+            None => continue,
+        };
+        let right = match parts.next() {
+            Some(right) => right,
+            None => continue,
+        };
+
+        let left_fields: Vec<&str> = left.split_whitespace().collect();
+        if left_fields.len() < 5 {
+            continue;
+        }
+        let mount_point = unescape_mount_field(left_fields[4]);
+        let right_fields: Vec<&str> = right.split_whitespace().collect();
+        if right_fields.len() < 2 {
+            continue;
+        }
+        let fs_type = right_fields[0];
+        let source = right_fields[1];
+
+        if !should_include_mount(source, &mount_point) {
+            continue;
+        }
+
+        let path = PathBuf::from(&mount_point);
+        let subtitle = format!("{mount_point} [{fs_type}]");
+        let detail = mount_detail(source, &mount_point);
+        let icon_name = icon_for_mount(source, &mount_point);
+        entries
+            .entry(path)
+            .or_insert((source.to_string(), subtitle, detail, icon_name));
+    }
+
+    entries
+        .into_iter()
+        .map(|(path, (title, subtitle, detail, icon_name))| MountEntry {
+            title,
+            subtitle,
+            detail,
+            icon_name,
+            path,
+        })
+        .collect()
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn should_include_mount(source: &str, mount_point: &str) -> bool {
+    source.starts_with("/dev/")
+        || mount_point == "/"
+        || mount_point.starts_with("/run/media/")
+        || mount_point.starts_with("/media/")
+        || mount_point.starts_with("/mnt/")
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn icon_for_mount(source: &str, mount_point: &str) -> &'static str {
+    if mount_point.starts_with("/run/media/") || mount_point.starts_with("/media/") {
+        "media-removable-symbolic"
+    } else if mount_point == "/" || source.starts_with("/dev/") {
+        "drive-harddisk-symbolic"
+    } else {
+        "drive-harddisk-symbolic"
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn mount_detail(source: &str, mount_point: &str) -> String {
+    let fs = filesystem_bytes(mount_point);
+    let model = device_model(source);
+    match (fs, model) {
+        (Some((total, free)), Some(model)) => format!(
+            "{} total • {} free • {}",
+            human_bytes(total),
+            human_bytes(free),
+            model
+        ),
+        (Some((total, free)), None) => {
+            format!("{} total • {} free", human_bytes(total), human_bytes(free))
+        }
+        (None, Some(model)) => model,
+        (None, None) => "Details unavailable".to_string(),
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn filesystem_bytes(mount_point: &str) -> Option<(u64, u64)> {
+    use std::ffi::CString;
+    let c_path = CString::new(mount_point).ok()?;
+    unsafe {
+        let mut st: libc::statvfs = std::mem::zeroed();
+        if libc::statvfs(c_path.as_ptr(), &mut st) != 0 {
+            return None;
+        }
+        let total = st.f_blocks as u64 * st.f_frsize as u64;
+        let free = st.f_bavail as u64 * st.f_frsize as u64;
+        Some((total, free))
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn device_model(source: &str) -> Option<String> {
+    let dev_name = device_name_from_source(source)?;
+    let model_path = format!("/sys/class/block/{}/device/model", dev_name);
+    let model = std::fs::read_to_string(model_path).ok()?;
+    let model = model.trim();
+    if model.is_empty() {
+        None
+    } else {
+        Some(model.to_string())
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn device_name_from_source(source: &str) -> Option<String> {
+    if source.starts_with("/dev/") {
+        let path = std::path::Path::new(source);
+        if source.starts_with("/dev/mapper/") {
+            if let Ok(link) = std::fs::read_link(path) {
+                if let Some(name) = link.file_name().and_then(|v| v.to_str()) {
+                    return Some(name.to_string());
+                }
+            }
+        }
+        return path
+            .file_name()
+            .and_then(|v| v.to_str())
+            .map(|v| v.to_string());
+    }
+    None
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn human_bytes(value: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut size = value as f64;
+    let mut unit = 0;
+    while size >= 1024.0 && unit + 1 < UNITS.len() {
+        size /= 1024.0;
+        unit += 1;
+    }
+    format!("{:.1} {}", size, UNITS[unit])
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn unescape_mount_field(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            let a = chars.next();
+            let b = chars.next();
+            let c = chars.next();
+            if let (Some(a), Some(b), Some(c)) = (a, b, c) {
+                if a.is_ascii_digit() && b.is_ascii_digit() && c.is_ascii_digit() {
+                    let oct = [a, b, c].iter().collect::<String>();
+                    if let Ok(val) = u8::from_str_radix(&oct, 8) {
+                        out.push(val as char);
+                        continue;
+                    }
+                }
+                out.push('\\');
+                out.push(a);
+                out.push(b);
+                out.push(c);
+                continue;
+            }
+            out.push('\\');
+            if let Some(a) = a {
+                out.push(a);
+            }
+            if let Some(b) = b {
+                out.push(b);
+            }
+            if let Some(c) = c {
+                out.push(c);
+            }
+            continue;
+        }
+        out.push(ch);
+    }
+    out
 }

@@ -18,19 +18,19 @@ pub(crate) struct FileActionBar {
 
 #[derive(Clone)]
 pub(crate) struct RowItem {
-    kind: RowKind,
+    pub(crate) kind: RowKind,
 }
 
 #[derive(Clone)]
-enum RowKind {
+pub(crate) enum RowKind {
     File(FileRow),
     MatchGroup { label: String, matches: Vec<FileRow> },
     MatchItem(FileRow),
 }
 
 #[derive(Clone)]
-struct FileRow {
-    id: i64,
+pub(crate) struct FileRow {
+    pub(crate) id: i64,
     path: PathBuf,
     size_bytes: u64,
     blake3: Option<[u8; 32]>,
