@@ -10,14 +10,22 @@ use crate::models::{
 
 pub struct SqliteScanStore {
     conn: Connection,
+    has_file_id: bool,
 }
 
 impl SqliteScanStore {
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
-        let store = Self { conn };
+        let store = Self {
+            conn,
+            has_file_id: false,
+        };
         store.init_schema()?;
-        Ok(store)
+        let has_file_id = store.files_table_has_id()?;
+        Ok(Self {
+            conn: store.conn,
+            has_file_id,
+        })
     }
 
     fn init_schema(&self) -> Result<()> {
@@ -74,6 +82,26 @@ impl SqliteScanStore {
         Ok(())
     }
 
+    fn files_table_has_id(&self) -> Result<bool> {
+        let mut stmt = self.conn.prepare("PRAGMA table_info(files)")?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == "id" {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn file_id_column(&self) -> &'static str {
+        if self.has_file_id {
+            "id"
+        } else {
+            "rowid"
+        }
+    }
+
     pub fn upsert_file(&self, rec: &MediaFileRecord) -> Result<i64> {
         let modified_at_secs = rec
             .modified_at
@@ -106,13 +134,13 @@ impl SqliteScanStore {
                 rec.file_type.as_deref(),
             ],
         )?;
-        let file_id = self
-            .conn
-            .query_row(
-                r#"SELECT id FROM files WHERE path = ?1"#,
-                params![rec.path.to_string_lossy()],
-                |r| r.get::<_, i64>(0),
-            )?;
+        let id_col = self.file_id_column();
+        let sql = format!("SELECT {id_col} FROM files WHERE path = ?1");
+        let file_id = self.conn.query_row(
+            &sql,
+            params![rec.path.to_string_lossy()],
+            |r| r.get::<_, i64>(0),
+        )?;
         Ok(file_id)
     }
 
@@ -274,14 +302,16 @@ impl SqliteScanStore {
     }
 
     pub fn list_files(&self, limit: usize, offset: usize) -> Result<Vec<FileListRow>> {
-        let mut stmt = self.conn.prepare(
+        let id_col = self.file_id_column();
+        let sql = format!(
             r#"
-            SELECT id, path, size_bytes, blake3, sha256, file_type
+            SELECT {id_col} AS id, path, size_bytes, blake3, sha256, file_type
             FROM files
             ORDER BY path
             LIMIT ?1 OFFSET ?2
-            "#,
-        )?;
+            "#
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![limit as i64, offset as i64], |r| {
             let blake3: Option<Vec<u8>> = r.get(3)?;
             let sha256: Option<Vec<u8>> = r.get(4)?;
@@ -303,19 +333,21 @@ impl SqliteScanStore {
     }
 
     pub fn list_files_with_duplicates(&self, limit: usize, offset: usize) -> Result<Vec<FileListRow>> {
-        let mut stmt = self.conn.prepare(
+        let id_col = self.file_id_column();
+        let sql = format!(
             r#"
-            SELECT f1.id, f1.path, f1.size_bytes, f1.blake3, f1.sha256, f1.file_type
+            SELECT f1.{id_col} AS id, f1.path, f1.size_bytes, f1.blake3, f1.sha256, f1.file_type
             FROM files f1
             WHERE f1.blake3 IS NOT NULL
               AND EXISTS (
                 SELECT 1 FROM files f2
-                WHERE f2.blake3 = f1.blake3 AND f2.id != f1.id
+                WHERE f2.blake3 = f1.blake3 AND f2.{id_col} != f1.{id_col}
               )
             ORDER BY f1.path
             LIMIT ?1 OFFSET ?2
-            "#,
-        )?;
+            "#
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![limit as i64, offset as i64], |r| {
             let blake3: Option<Vec<u8>> = r.get(3)?;
             let sha256: Option<Vec<u8>> = r.get(4)?;
@@ -337,10 +369,11 @@ impl SqliteScanStore {
     }
 
     pub fn list_direct_matches_by_blake3(&self, file_id: i64) -> Result<Vec<FileListRow>> {
+        let id_col = self.file_id_column();
         let blake3: Option<Vec<u8>> = self
             .conn
             .query_row(
-                r#"SELECT blake3 FROM files WHERE id = ?1"#,
+                &format!(r#"SELECT blake3 FROM files WHERE {id_col} = ?1"#),
                 params![file_id],
                 |r| r.get(0),
             )
@@ -349,14 +382,15 @@ impl SqliteScanStore {
             return Ok(Vec::new());
         };
 
-        let mut stmt = self.conn.prepare(
+        let sql = format!(
             r#"
-            SELECT id, path, size_bytes, blake3, sha256, file_type
+            SELECT {id_col} AS id, path, size_bytes, blake3, sha256, file_type
             FROM files
-            WHERE blake3 = ?1 AND id != ?2
+            WHERE blake3 = ?1 AND {id_col} != ?2
             ORDER BY path
-            "#,
-        )?;
+            "#
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![blake3, file_id], |r| {
             let blake3: Option<Vec<u8>> = r.get(3)?;
             let sha256: Option<Vec<u8>> = r.get(4)?;
