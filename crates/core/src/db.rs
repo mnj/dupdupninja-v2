@@ -515,6 +515,14 @@ impl SqliteScanStore {
         }
         Ok(out)
     }
+
+    pub fn delete_file_by_path(&self, path: &Path) -> Result<bool> {
+        let affected = self.conn.execute(
+            "DELETE FROM files WHERE path = ?1",
+            params![path.to_string_lossy()],
+        )?;
+        Ok(affected > 0)
+    }
 }
 
 fn blob_to_hash(blob: Option<Vec<u8>>) -> Option<[u8; 32]> {

@@ -637,7 +637,7 @@ fn apply_to_selected<F>(ui_state: &Rc<RefCell<Option<UiState>>>, mut action: F)
 where
     F: FnMut(&Path) -> std::result::Result<String, String>,
 {
-    let paths = {
+    let (paths, db_path) = {
         let state_ref = ui_state.borrow();
         let Some(state) = state_ref.as_ref() else {
             return;
@@ -658,16 +658,23 @@ where
             );
             return;
         }
+        let db_path = entry.db_path.clone();
         let mut out = Vec::new();
         for selected in state.selected_files.values() {
             out.push(root.join(&selected.rel_path));
         }
-        out
+        (out, db_path)
     };
 
     let mut last_result: Option<std::result::Result<String, String>> = None;
     for path in paths {
-        last_result = Some(action(&path));
+        let result = action(&path);
+        if result.is_ok() {
+            if let Ok(store) = dupdupninja_core::db::SqliteScanStore::open(&db_path) {
+                let _ = store.delete_file_by_path(&path);
+            }
+        }
+        last_result = Some(result);
     }
 
     if let Some(result) = last_result {
@@ -695,7 +702,7 @@ fn apply_to_selected_with_parent<F>(
 where
     F: FnMut(&Path, &Path) -> std::result::Result<String, String>,
 {
-    let paths = {
+    let (paths, db_path) = {
         let state_ref = ui_state.borrow();
         let Some(state) = state_ref.as_ref() else {
             return;
@@ -716,6 +723,7 @@ where
             );
             return;
         }
+        let db_path = entry.db_path.clone();
         let mut out = Vec::new();
         for selected in state.selected_files.values() {
             out.push((
@@ -723,12 +731,18 @@ where
                 root.join(&selected.parent_rel_path),
             ));
         }
-        out
+        (out, db_path)
     };
 
     let mut last_result: Option<std::result::Result<String, String>> = None;
     for (path, parent_path) in paths {
-        last_result = Some(action(&path, &parent_path));
+        let result = action(&path, &parent_path);
+        if result.is_ok() {
+            if let Ok(store) = dupdupninja_core::db::SqliteScanStore::open(&db_path) {
+                let _ = store.delete_file_by_path(&path);
+            }
+        }
+        last_result = Some(result);
     }
 
     if let Some(result) = last_result {
