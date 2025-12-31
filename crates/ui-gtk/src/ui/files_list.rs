@@ -453,7 +453,7 @@ pub(crate) fn build_file_action_bar(ui_state: Rc<RefCell<Option<UiState>>>) -> F
 
     let ui_state_for_actions = ui_state.clone();
     trash.connect_clicked(move |_| {
-        apply_to_selected(&ui_state_for_actions, |path| {
+        apply_to_selected(&ui_state_for_actions, "trash", |path| {
             let file = gtk::gio::File::for_path(path);
             file.trash(None::<&gtk::gio::Cancellable>)
                 .map(|_| "Moved to Trash".to_string())
@@ -463,7 +463,7 @@ pub(crate) fn build_file_action_bar(ui_state: Rc<RefCell<Option<UiState>>>) -> F
 
     let ui_state_for_actions = ui_state.clone();
     delete.connect_clicked(move |_| {
-        apply_to_selected(&ui_state_for_actions, |path| {
+        apply_to_selected(&ui_state_for_actions, "delete", |path| {
             std::fs::remove_file(path)
                 .map(|_| "Deleted permanently".to_string())
                 .map_err(|e| e.to_string())
@@ -479,7 +479,7 @@ pub(crate) fn build_file_action_bar(ui_state: Rc<RefCell<Option<UiState>>>) -> F
             dialog.select_folder(Some(&window), None::<&gtk::gio::Cancellable>, move |res| {
                 if let Ok(dest) = res {
                     if let Some(folder) = dest.path() {
-                        apply_to_selected(&ui_state_for_dialog, |path| {
+                        apply_to_selected(&ui_state_for_dialog, "copy", |path| {
                             let file_name = path.file_name().unwrap_or_default().to_os_string();
                             let target = folder.join(file_name);
                             std::fs::copy(path, &target)
@@ -501,7 +501,7 @@ pub(crate) fn build_file_action_bar(ui_state: Rc<RefCell<Option<UiState>>>) -> F
             dialog.select_folder(Some(&window), None::<&gtk::gio::Cancellable>, move |res| {
                 if let Ok(dest) = res {
                     if let Some(folder) = dest.path() {
-                        apply_to_selected(&ui_state_for_dialog, |path| {
+                        apply_to_selected(&ui_state_for_dialog, "move", |path| {
                             let file_name = path.file_name().unwrap_or_default().to_os_string();
                             let target = folder.join(file_name);
                             std::fs::rename(path, &target)
@@ -516,46 +516,30 @@ pub(crate) fn build_file_action_bar(ui_state: Rc<RefCell<Option<UiState>>>) -> F
 
     let ui_state_for_actions = ui_state.clone();
     replace_symlink.connect_clicked(move |_| {
-        apply_to_selected_with_parent(&ui_state_for_actions, |path, parent_path| {
-            println!(
-                "ddn: symlink replace requested: target={} source={}",
-                parent_path.display(),
-                path.display()
-            );
+        apply_to_selected_with_parent(&ui_state_for_actions, "replace_symlink", |path, parent_path| {
             if path == parent_path {
-                println!("ddn: skipped, target equals source");
                 return Ok("Skipped parent file".to_string());
             }
             if !parent_path.exists() {
-                println!("ddn: parent missing, aborting");
                 return Err("Parent file no longer exists".to_string());
             }
             #[cfg(unix)]
             {
                 let backup = unique_backup_path(path);
-                println!("ddn: renaming to backup {}", backup.display());
                 std::fs::rename(path, &backup).map_err(|e| e.to_string())?;
-                println!(
-                    "ddn: creating symlink {} -> {}",
-                    path.display(),
-                    parent_path.display()
-                );
                 match std::os::unix::fs::symlink(parent_path, path) {
                     Ok(_) => {
                         if let Ok(meta) = std::fs::symlink_metadata(path) {
                             if meta.file_type().is_symlink() {
-                                println!("ddn: symlink created, removing backup");
                                 let _ = std::fs::remove_file(&backup);
                                 return Ok("Replaced with symlink".to_string());
                             }
                         }
-                        println!("ddn: verification failed, restoring backup");
                         let _ = std::fs::remove_file(path);
                         let _ = std::fs::rename(&backup, path);
                         Err("Symlink verification failed".to_string())
                     }
                     Err(err) => {
-                        println!("ddn: symlink failed: {err}, restoring backup");
                         let _ = std::fs::rename(&backup, path);
                         Err(err.to_string())
                     }
@@ -563,7 +547,6 @@ pub(crate) fn build_file_action_bar(ui_state: Rc<RefCell<Option<UiState>>>) -> F
             }
             #[cfg(not(unix))]
             {
-                println!("ddn: symlink not supported on this OS");
                 Err("Symlink replacement is only supported on Unix".to_string())
             }
         });
@@ -633,7 +616,11 @@ pub(crate) fn update_action_bar_state(state: &mut UiState) {
     state.action_bar_buttons.compare.set_sensitive(enabled);
 }
 
-fn apply_to_selected<F>(ui_state: &Rc<RefCell<Option<UiState>>>, mut action: F)
+fn apply_to_selected<F>(
+    ui_state: &Rc<RefCell<Option<UiState>>>,
+    action_name: &str,
+    mut action: F,
+)
 where
     F: FnMut(&Path) -> std::result::Result<String, String>,
 {
@@ -669,6 +656,7 @@ where
     let mut last_result: Option<std::result::Result<String, String>> = None;
     for path in paths {
         let result = action(&path);
+        log_action(&db_path, action_name, &path, result.as_ref().err());
         if result.is_ok() {
             if let Ok(store) = dupdupninja_core::db::SqliteScanStore::open(&db_path) {
                 let _ = store.delete_file_by_path(&path);
@@ -697,6 +685,7 @@ where
 
 fn apply_to_selected_with_parent<F>(
     ui_state: &Rc<RefCell<Option<UiState>>>,
+    action_name: &str,
     mut action: F,
 )
 where
@@ -737,6 +726,7 @@ where
     let mut last_result: Option<std::result::Result<String, String>> = None;
     for (path, parent_path) in paths {
         let result = action(&path, &parent_path);
+        log_action(&db_path, action_name, &path, result.as_ref().err());
         if result.is_ok() {
             if let Ok(store) = dupdupninja_core::db::SqliteScanStore::open(&db_path) {
                 let _ = store.delete_file_by_path(&path);
@@ -784,6 +774,31 @@ fn resolve_root_path(meta: &dupdupninja_core::FilesetMetadata) -> PathBuf {
     }
 
     PathBuf::new()
+}
+
+fn log_action(db_path: &Path, action: &str, path: &Path, error: Option<&String>) {
+    let log_path = db_path.with_extension("log");
+    let ts = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => d.as_secs(),
+        Err(_) => 0,
+    };
+    let line = if let Some(err) = error {
+        format!(
+            "{ts} action={action} path=\"{}\" error=\"{}\"\n",
+            path.display(),
+            err.replace('"', "'")
+        )
+    } else {
+        format!("{ts} action={action} path=\"{}\" ok\n", path.display())
+    };
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        use std::io::Write;
+        let _ = file.write_all(line.as_bytes());
+    }
 }
 
 fn active_window(ui_state: &Rc<RefCell<Option<UiState>>>) -> Option<gtk::Window> {
