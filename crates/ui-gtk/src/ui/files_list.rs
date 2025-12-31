@@ -520,12 +520,30 @@ pub(crate) fn build_file_action_bar(ui_state: Rc<RefCell<Option<UiState>>>) -> F
             if path == parent_path {
                 return Ok("Skipped parent file".to_string());
             }
-            std::fs::remove_file(path).map_err(|e| e.to_string())?;
+            if !parent_path.exists() {
+                return Err("Parent file no longer exists".to_string());
+            }
             #[cfg(unix)]
             {
-                std::os::unix::fs::symlink(parent_path, path)
-                    .map(|_| "Replaced with symlink".to_string())
-                    .map_err(|e| e.to_string())
+                let backup = unique_backup_path(path);
+                std::fs::rename(path, &backup).map_err(|e| e.to_string())?;
+                match std::os::unix::fs::symlink(parent_path, path) {
+                    Ok(_) => {
+                        if let Ok(meta) = std::fs::symlink_metadata(path) {
+                            if meta.file_type().is_symlink() {
+                                let _ = std::fs::remove_file(&backup);
+                                return Ok("Replaced with symlink".to_string());
+                            }
+                        }
+                        let _ = std::fs::remove_file(path);
+                        let _ = std::fs::rename(&backup, path);
+                        Err("Symlink verification failed".to_string())
+                    }
+                    Err(err) => {
+                        let _ = std::fs::rename(&backup, path);
+                        Err(err.to_string())
+                    }
+                }
             }
             #[cfg(not(unix))]
             {
@@ -559,6 +577,26 @@ pub(crate) fn build_file_action_bar(ui_state: Rc<RefCell<Option<UiState>>>) -> F
         buttons,
         container: bar,
     }
+}
+
+#[cfg(unix)]
+fn unique_backup_path(path: &Path) -> PathBuf {
+    let base = path
+        .file_name()
+        .and_then(|v| v.to_str())
+        .unwrap_or("file");
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut candidate = dir.join(format!("{base}.ddn-bak"));
+    if !candidate.exists() {
+        return candidate;
+    }
+    for idx in 1..=100 {
+        candidate = dir.join(format!("{base}.ddn-bak-{idx}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    candidate
 }
 
 pub(crate) fn update_action_bar_state(state: &mut UiState) {
