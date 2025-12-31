@@ -6,7 +6,7 @@ use gtk4 as gtk;
 use gtk::glib::prelude::Cast;
 use gtk::prelude::*;
 
-use dupdupninja_core::models::FileListRow;
+use dupdupninja_core::models::{FileListRow, FileSnapshotRecord};
 use dupdupninja_core::MediaFileRecord;
 
 use crate::ui::state::{FileActionButtons, SelectedFile, UiState};
@@ -741,23 +741,32 @@ fn open_compare_window(ui_state: &Rc<RefCell<Option<UiState>>>) {
             Some(parent) => parent,
             None => continue,
         };
+        let parent_snapshots = load_snapshots(&store, parent.file_id);
         let mut match_records = Vec::new();
         for id in matches {
             if let Some(rec) = store.get_file_by_id(id).ok().flatten() {
-                match_records.push(rec);
+                match_records.push(CompareFile {
+                    snapshots: load_snapshots(&store, rec.file_id),
+                    record: rec,
+                });
             }
         }
         if match_records.is_empty() {
             continue;
         }
 
-        let tab_title = parent
-            .path
-            .file_name()
-            .and_then(|v| v.to_str())
-            .unwrap_or("Parent");
-        let tab = build_compare_tab(&root_path, &parent, &match_records);
-        let tab_label = gtk::Label::new(Some(tab_title));
+        let tab_title = display_name(&parent);
+        let parent_file = CompareFile {
+            record: parent,
+            snapshots: parent_snapshots,
+        };
+        let max_snapshots = std::iter::once(&parent_file)
+            .chain(match_records.iter())
+            .map(|f| f.snapshots.len())
+            .max()
+            .unwrap_or(0);
+        let tab = build_compare_tab(&root_path, &parent_file, &match_records, max_snapshots);
+        let tab_label = gtk::Label::new(Some(&tab_title));
         notebook.append_page(&tab, Some(&tab_label));
     }
 
@@ -778,16 +787,22 @@ fn open_compare_window(ui_state: &Rc<RefCell<Option<UiState>>>) {
     window.present();
 }
 
+struct CompareFile {
+    record: MediaFileRecord,
+    snapshots: Vec<FileSnapshotRecord>,
+}
+
 fn build_compare_tab(
     root_path: &Path,
-    parent: &MediaFileRecord,
-    matches: &[MediaFileRecord],
+    parent: &CompareFile,
+    matches: &[CompareFile],
+    max_snapshots: usize,
 ) -> gtk::Widget {
-    let fields = metadata_fields();
-    let parent_title = format!("Parent: {}", display_name(parent));
+    let rows = metadata_rows(max_snapshots);
+    let parent_title = format!("Parent: {}", display_name(&parent.record));
     let parent_column = build_metadata_column(
         &parent_title,
-        &fields,
+        &rows,
         parent,
         root_path,
         true,
@@ -795,8 +810,8 @@ fn build_compare_tab(
 
     let matches_box = gtk::Box::new(gtk::Orientation::Horizontal, 16);
     for file in matches {
-        let title = display_name(file);
-        let column = build_metadata_column(&title, &fields, file, root_path, false);
+        let title = display_name(&file.record);
+        let column = build_metadata_column(&title, &rows, file, root_path, false);
         matches_box.append(&column);
     }
 
@@ -816,8 +831,8 @@ fn build_compare_tab(
 
 fn build_metadata_column(
     title: &str,
-    fields: &[(String, MetadataField)],
-    record: &MediaFileRecord,
+    rows: &[CompareRow],
+    file: &CompareFile,
     root_path: &Path,
     include_labels: bool,
 ) -> gtk::Widget {
@@ -832,22 +847,33 @@ fn build_metadata_column(
     header.add_css_class("title-4");
     column.append(&header);
 
-    for (label, field) in fields {
+    for row_def in rows {
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        let label_widget = gtk::Label::new(Some(label));
+        let label_text = match row_def {
+            CompareRow::Field(label, _) => label.clone(),
+            CompareRow::Snapshot(index) => snapshot_label(*index),
+        };
+        let label_widget = gtk::Label::new(Some(&label_text));
         label_widget.set_xalign(0.0);
         label_widget.set_width_chars(16);
         label_widget.add_css_class("dim-label");
         if !include_labels {
             label_widget.set_visible(false);
         }
-        let value = metadata_value(field, record, root_path);
-        let value_label = gtk::Label::new(Some(&value));
-        value_label.set_xalign(0.0);
-        value_label.set_wrap(true);
-        value_label.set_selectable(true);
         row.append(&label_widget);
-        row.append(&value_label);
+        match row_def {
+            CompareRow::Field(_, field) => {
+                let value = metadata_value(field, &file.record, root_path);
+                let value_label = gtk::Label::new(Some(&value));
+                value_label.set_xalign(0.0);
+                value_label.set_wrap(true);
+                value_label.set_selectable(true);
+                row.append(&value_label);
+            }
+            CompareRow::Snapshot(index) => {
+                row.append(&snapshot_widget(&file.snapshots, *index));
+            }
+        }
         column.append(&row);
     }
 
@@ -865,16 +891,48 @@ enum MetadataField {
     Ffmpeg,
 }
 
-fn metadata_fields() -> Vec<(String, MetadataField)> {
-    vec![
-        ("Path".to_string(), MetadataField::Path),
-        ("Size".to_string(), MetadataField::Size),
-        ("Modified".to_string(), MetadataField::Modified),
-        ("File Type".to_string(), MetadataField::FileType),
-        ("Blake3".to_string(), MetadataField::Blake3),
-        ("SHA-256".to_string(), MetadataField::Sha256),
-        ("FFmpeg metadata".to_string(), MetadataField::Ffmpeg),
-    ]
+enum CompareRow {
+    Field(String, MetadataField),
+    Snapshot(usize),
+}
+
+fn metadata_rows(max_snapshots: usize) -> Vec<CompareRow> {
+    let mut rows = vec![
+        CompareRow::Field("Path".to_string(), MetadataField::Path),
+        CompareRow::Field("Size".to_string(), MetadataField::Size),
+        CompareRow::Field("Modified".to_string(), MetadataField::Modified),
+        CompareRow::Field("File Type".to_string(), MetadataField::FileType),
+        CompareRow::Field("Blake3".to_string(), MetadataField::Blake3),
+        CompareRow::Field("SHA-256".to_string(), MetadataField::Sha256),
+        CompareRow::Field("FFmpeg metadata".to_string(), MetadataField::Ffmpeg),
+    ];
+    for idx in 0..max_snapshots {
+        rows.push(CompareRow::Snapshot(idx));
+    }
+    rows
+}
+
+fn snapshot_label(index: usize) -> String {
+    format!("Snapshot {}", index + 1)
+}
+
+fn snapshot_widget(snapshots: &[FileSnapshotRecord], index: usize) -> gtk::Widget {
+    if let Some(snapshot) = snapshots.get(index) {
+        let bytes = gtk::glib::Bytes::from(&snapshot.image_avif);
+        if let Ok(texture) = gtk::gdk::Texture::from_bytes(&bytes) {
+            let picture = gtk::Picture::for_paintable(&texture);
+            picture.set_can_shrink(true);
+            picture.set_content_fit(gtk::ContentFit::Contain);
+            picture.set_size_request(160, 90);
+            return picture.upcast();
+        }
+        let label = gtk::Label::new(Some("Snapshot unavailable"));
+        label.set_xalign(0.0);
+        return label.upcast();
+    }
+    let label = gtk::Label::new(Some("-"));
+    label.set_xalign(0.0);
+    label.upcast()
 }
 
 fn metadata_value(field: &MetadataField, record: &MediaFileRecord, root_path: &Path) -> String {
@@ -911,6 +969,16 @@ fn display_name(record: &MediaFileRecord) -> String {
         .and_then(|v| v.to_str())
         .unwrap_or("(unknown)")
         .to_string()
+}
+
+fn load_snapshots(
+    store: &dupdupninja_core::db::SqliteScanStore,
+    file_id: Option<i64>,
+) -> Vec<FileSnapshotRecord> {
+    let Some(file_id) = file_id else {
+        return Vec::new();
+    };
+    store.list_file_snapshots(file_id).unwrap_or_default()
 }
 
 fn format_bytes(bytes: u64) -> String {

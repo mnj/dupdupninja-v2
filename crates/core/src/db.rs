@@ -489,6 +489,32 @@ impl SqliteScanStore {
             .optional()?;
         Ok(row)
     }
+
+    pub fn list_file_snapshots(&self, file_id: i64) -> Result<Vec<FileSnapshotRecord>> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            SELECT snapshot_index, snapshot_count, at_ms, duration_ms, image_avif
+            FROM file_snapshots
+            WHERE file_id = ?1
+            ORDER BY snapshot_index
+            "#,
+        )?;
+        let rows = stmt.query_map(params![file_id], |r| {
+            Ok(FileSnapshotRecord {
+                snapshot_index: r.get::<_, i64>(0)? as u32,
+                snapshot_count: r.get::<_, i64>(1)? as u32,
+                at_ms: r.get::<_, i64>(2)?,
+                duration_ms: r.get::<_, Option<i64>>(3)?,
+                image_avif: r.get(4)?,
+            })
+        })?;
+
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
 }
 
 fn blob_to_hash(blob: Option<Vec<u8>>) -> Option<[u8; 32]> {
