@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 dupdupninja-core = { path = "../core" }
 libc = "0.2"
+image = { version = "0.25", default-features = false, features = ["avif", "png"] }
 
 [features]
 gtk = ["dep:gtk4", "dep:adw"]

@@ -8,6 +8,7 @@ use gtk::prelude::*;
 
 use dupdupninja_core::models::{FileListRow, FileSnapshotRecord};
 use dupdupninja_core::MediaFileRecord;
+use image::ImageFormat;
 
 use crate::ui::state::{FileActionButtons, SelectedFile, UiState};
 
@@ -936,6 +937,13 @@ fn snapshot_widget(snapshots: &[FileSnapshotRecord], index: usize) -> gtk::Widge
             picture.set_size_request(160, 90);
             return picture.upcast();
         }
+        if let Some(texture) = decode_avif_texture(&snapshot.image_avif) {
+            let picture = gtk::Picture::for_paintable(&texture);
+            picture.set_can_shrink(true);
+            picture.set_content_fit(gtk::ContentFit::Contain);
+            picture.set_size_request(160, 90);
+            return picture.upcast();
+        }
         let label = gtk::Label::new(Some("Snapshot unavailable"));
         label.set_xalign(0.0);
         return label.upcast();
@@ -989,6 +997,22 @@ fn load_snapshots(
         return Vec::new();
     };
     store.list_file_snapshots(file_id).unwrap_or_default()
+}
+
+fn decode_avif_texture(data: &[u8]) -> Option<gtk::gdk::Texture> {
+    let img = image::load_from_memory_with_format(data, ImageFormat::Avif).ok()?;
+    let rgba = img.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let stride = (width as usize).saturating_mul(4);
+    let bytes = gtk::glib::Bytes::from_owned(rgba.into_raw());
+    let texture = gtk::gdk::MemoryTexture::new(
+        width as i32,
+        height as i32,
+        gtk::gdk::MemoryFormat::R8g8b8a8,
+        &bytes,
+        stride,
+    );
+    Some(texture.upcast::<gtk::gdk::Texture>())
 }
 
 fn format_bytes(bytes: u64) -> String {
