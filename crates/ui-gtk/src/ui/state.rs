@@ -28,6 +28,11 @@ pub(crate) struct FilesetEntry {
     pub(crate) metadata: FilesetMetadata,
 }
 
+pub(crate) struct SelectedFile {
+    pub(crate) rel_path: PathBuf,
+    pub(crate) parent_rel_path: PathBuf,
+}
+
 pub(crate) struct UiState {
     pub(crate) status_label: gtk::Label,
     pub(crate) progress: gtk::ProgressBar,
@@ -50,7 +55,7 @@ pub(crate) struct UiState {
     pub(crate) snapshots_per_video: u32,
     pub(crate) snapshot_max_dim: u32,
     pub(crate) last_files_refresh: Option<Instant>,
-    pub(crate) selected_files: HashMap<i64, PathBuf>,
+    pub(crate) selected_files: HashMap<i64, SelectedFile>,
     pub(crate) action_bar_label: gtk::Label,
     pub(crate) action_bar_buttons: FileActionButtons,
     pub(crate) show_only_duplicates: bool,

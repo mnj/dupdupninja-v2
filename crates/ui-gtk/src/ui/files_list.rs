@@ -8,7 +8,7 @@ use gtk::prelude::*;
 
 use dupdupninja_core::models::FileListRow;
 
-use crate::ui::state::{FileActionButtons, UiState};
+use crate::ui::state::{FileActionButtons, SelectedFile, UiState};
 
 pub(crate) struct FileActionBar {
     pub(crate) label: gtk::Label,
@@ -131,13 +131,25 @@ pub(crate) fn build_files_column_view(
             let rel_path = unsafe {
                 cb.data::<PathBuf>("ddn-path").map(|p| p.as_ref().clone())
             };
+            let parent_path = unsafe {
+                cb.data::<PathBuf>("ddn-parent-path")
+                    .map(|p| p.as_ref().clone())
+            };
             let mut state = ui_state_for_toggle.borrow_mut();
             let Some(state) = state.as_mut() else {
                 return;
             };
-            if let (Some(file_id), Some(rel_path)) = (file_id, rel_path) {
+            if let (Some(file_id), Some(rel_path), Some(parent_path)) =
+                (file_id, rel_path, parent_path)
+            {
                 if cb.is_active() {
-                    state.selected_files.insert(file_id, rel_path);
+                    state.selected_files.insert(
+                        file_id,
+                        SelectedFile {
+                            rel_path,
+                            parent_rel_path: parent_path,
+                        },
+                    );
                 } else {
                     state.selected_files.remove(&file_id);
                 }
@@ -159,6 +171,7 @@ pub(crate) fn build_files_column_view(
             .item()
             .and_then(|o| o.downcast::<gtk::TreeListRow>().ok());
         let row_item: Option<RowItem> = tree_row
+            .as_ref()
             .and_then(|row| row.item())
             .and_then(|o| o.downcast::<gtk::glib::BoxedAnyObject>().ok())
             .and_then(|o| o.try_borrow::<RowItem>().ok().map(|r| r.clone()));
@@ -171,6 +184,15 @@ pub(crate) fn build_files_column_view(
                     unsafe {
                         check.set_data("ddn-file-id", file.id);
                         check.set_data("ddn-path", file.path.clone());
+                    }
+                    if let Some(parent_path) =
+                        tree_row.as_ref().and_then(find_parent_file_path)
+                    {
+                        unsafe {
+                            check.set_data("ddn-parent-path", parent_path);
+                        }
+                    } else {
+                        check.set_sensitive(false);
                     }
                     let selected = ui_state_for_bind
                         .try_borrow()
@@ -295,6 +317,23 @@ pub(crate) fn build_files_column_view(
     );
 
     column_view
+}
+
+fn find_parent_file_path(row: &gtk::TreeListRow) -> Option<PathBuf> {
+    let mut current = row.parent();
+    while let Some(parent) = current {
+        let row_item: Option<RowItem> = parent
+            .item()
+            .and_then(|o| o.downcast::<gtk::glib::BoxedAnyObject>().ok())
+            .and_then(|o| o.try_borrow::<RowItem>().ok().map(|r| r.clone()));
+        if let Some(item) = row_item {
+            if let Some(file) = item.file_ref() {
+                return Some(file.path.clone());
+            }
+        }
+        current = parent.parent();
+    }
+    None
 }
 
 fn make_text_column<F>(title: &str, value: F) -> gtk::ColumnViewColumn
@@ -471,33 +510,22 @@ pub(crate) fn build_file_action_bar(ui_state: Rc<RefCell<Option<UiState>>>) -> F
 
     let ui_state_for_actions = ui_state.clone();
     replace_symlink.connect_clicked(move |_| {
-        let ui_state_for_dialog = ui_state_for_actions.clone();
-        if let Some(window) = active_window(&ui_state_for_dialog) {
-            let dialog = gtk::FileDialog::new();
-            dialog.set_title("Replace selected files with symlink to...");
-            dialog.open(Some(&window), None::<&gtk::gio::Cancellable>, move |res| {
-                if let Ok(file) = res {
-                    if let Some(target) = file.path() {
-                        apply_to_selected(&ui_state_for_dialog, |path| {
-                            if path == &target {
-                                return Ok("Skipped target file".to_string());
-                            }
-                            std::fs::remove_file(path).map_err(|e| e.to_string())?;
-                            #[cfg(unix)]
-                            {
-                                std::os::unix::fs::symlink(&target, path)
-                                    .map(|_| "Replaced with symlink".to_string())
-                                    .map_err(|e| e.to_string())
-                            }
-                            #[cfg(not(unix))]
-                            {
-                                Err("Symlink replacement is only supported on Unix".to_string())
-                            }
-                        });
-                    }
-                }
-            });
-        }
+        apply_to_selected_with_parent(&ui_state_for_actions, |path, parent_path| {
+            if path == parent_path {
+                return Ok("Skipped parent file".to_string());
+            }
+            std::fs::remove_file(path).map_err(|e| e.to_string())?;
+            #[cfg(unix)]
+            {
+                std::os::unix::fs::symlink(parent_path, path)
+                    .map(|_| "Replaced with symlink".to_string())
+                    .map_err(|e| e.to_string())
+            }
+            #[cfg(not(unix))]
+            {
+                Err("Symlink replacement is only supported on Unix".to_string())
+            }
+        });
     });
 
     let ui_state_for_toggle = ui_state.clone();
@@ -556,8 +584,8 @@ where
             None => return,
         };
         let mut out = Vec::new();
-        for rel in state.selected_files.values() {
-            out.push(entry.metadata.root_path.join(rel));
+        for selected in state.selected_files.values() {
+            out.push(entry.metadata.root_path.join(&selected.rel_path));
         }
         out
     };
@@ -565,6 +593,59 @@ where
     let mut last_result: Option<std::result::Result<String, String>> = None;
     for path in paths {
         last_result = Some(action(&path));
+    }
+
+    if let Some(result) = last_result {
+        update_status(ui_state, result);
+    }
+
+    let mut state = ui_state.borrow_mut();
+    let Some(state) = state.as_mut() else {
+        return;
+    };
+    state.selected_files.clear();
+    update_action_bar_state(state);
+    if let Some(active_id) = state.active_fileset_id {
+        if let Some(entry) = state.filesets.iter().find(|entry| entry.id == active_id) {
+            let db_path = entry.db_path.clone();
+            crate::ui::load_fileset_rows(state, &db_path);
+        }
+    }
+}
+
+fn apply_to_selected_with_parent<F>(
+    ui_state: &Rc<RefCell<Option<UiState>>>,
+    mut action: F,
+)
+where
+    F: FnMut(&Path, &Path) -> std::result::Result<String, String>,
+{
+    let paths = {
+        let state_ref = ui_state.borrow();
+        let Some(state) = state_ref.as_ref() else {
+            return;
+        };
+        let active_id = match state.active_fileset_id {
+            Some(id) => id,
+            None => return,
+        };
+        let entry = match state.filesets.iter().find(|entry| entry.id == active_id) {
+            Some(entry) => entry,
+            None => return,
+        };
+        let mut out = Vec::new();
+        for selected in state.selected_files.values() {
+            out.push((
+                entry.metadata.root_path.join(&selected.rel_path),
+                entry.metadata.root_path.join(&selected.parent_rel_path),
+            ));
+        }
+        out
+    };
+
+    let mut last_result: Option<std::result::Result<String, String>> = None;
+    for (path, parent_path) in paths {
+        last_result = Some(action(&path, &parent_path));
     }
 
     if let Some(result) = last_result {
