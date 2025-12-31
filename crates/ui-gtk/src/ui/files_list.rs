@@ -823,8 +823,18 @@ fn build_compare_tab(
     matches_scroller.set_hexpand(true);
     matches_scroller.set_vexpand(true);
 
+    let parent_scroller = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Never)
+        .child(&parent_column)
+        .build();
+    parent_scroller.set_hexpand(false);
+    parent_scroller.set_vexpand(true);
+    let adj = matches_scroller.vadjustment();
+    parent_scroller.set_vadjustment(Some(&adj));
+
     let container = gtk::Box::new(gtk::Orientation::Horizontal, 12);
-    container.append(&parent_column);
+    container.append(&parent_scroller);
     container.append(&matches_scroller);
     container.upcast()
 }
