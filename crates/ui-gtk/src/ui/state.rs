@@ -17,6 +17,7 @@ pub(crate) struct FileActionButtons {
     pub(crate) copy: gtk::Button,
     pub(crate) move_to: gtk::Button,
     pub(crate) replace_symlink: gtk::Button,
+    pub(crate) compare: gtk::Button,
 }
 
 pub(crate) struct FilesetEntry {

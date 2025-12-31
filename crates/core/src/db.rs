@@ -427,6 +427,68 @@ impl SqliteScanStore {
         }
         Ok(out)
     }
+
+    pub fn get_file_by_id(&self, file_id: i64) -> Result<Option<MediaFileRecord>> {
+        let id_col = self.file_id_column();
+        let sql = format!(
+            r#"
+            SELECT path, size_bytes, modified_at_secs, blake3, sha256, ffmpeg_metadata, file_type
+            FROM files
+            WHERE {id_col} = ?1
+            "#
+        );
+        let row = self
+            .conn
+            .query_row(&sql, params![file_id], |r| {
+                let blake3: Option<Vec<u8>> = r.get(3)?;
+                let sha256: Option<Vec<u8>> = r.get(4)?;
+                let modified_at_secs: Option<i64> = r.get(2)?;
+                Ok(MediaFileRecord {
+                    file_id: Some(file_id),
+                    path: Path::new(r.get::<_, String>(0)?.as_str()).to_path_buf(),
+                    size_bytes: r.get::<_, i64>(1)? as u64,
+                    modified_at: modified_at_secs
+                        .map(|v| secs_to_system_time(v.max(0) as u64)),
+                    blake3: blob_to_hash(blake3),
+                    sha256: blob_to_hash(sha256),
+                    ffmpeg_metadata: r.get(5)?,
+                    file_type: r.get(6)?,
+                })
+            })
+            .optional()?;
+        Ok(row)
+    }
+
+    pub fn get_file_by_path(&self, path: &Path) -> Result<Option<MediaFileRecord>> {
+        let id_col = self.file_id_column();
+        let sql = format!(
+            r#"
+            SELECT {id_col} AS id, size_bytes, modified_at_secs, blake3, sha256, ffmpeg_metadata, file_type
+            FROM files
+            WHERE path = ?1
+            "#
+        );
+        let row = self
+            .conn
+            .query_row(&sql, params![path.to_string_lossy()], |r| {
+                let blake3: Option<Vec<u8>> = r.get(3)?;
+                let sha256: Option<Vec<u8>> = r.get(4)?;
+                let modified_at_secs: Option<i64> = r.get(2)?;
+                Ok(MediaFileRecord {
+                    file_id: Some(r.get(0)?),
+                    path: path.to_path_buf(),
+                    size_bytes: r.get::<_, i64>(1)? as u64,
+                    modified_at: modified_at_secs
+                        .map(|v| secs_to_system_time(v.max(0) as u64)),
+                    blake3: blob_to_hash(blake3),
+                    sha256: blob_to_hash(sha256),
+                    ffmpeg_metadata: r.get(5)?,
+                    file_type: r.get(6)?,
+                })
+            })
+            .optional()?;
+        Ok(row)
+    }
 }
 
 fn blob_to_hash(blob: Option<Vec<u8>>) -> Option<[u8; 32]> {

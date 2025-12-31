@@ -7,6 +7,7 @@ use gtk::glib::prelude::Cast;
 use gtk::prelude::*;
 
 use dupdupninja_core::models::FileListRow;
+use dupdupninja_core::MediaFileRecord;
 
 use crate::ui::state::{FileActionButtons, SelectedFile, UiState};
 
@@ -428,6 +429,7 @@ pub(crate) fn build_file_action_bar(ui_state: Rc<RefCell<Option<UiState>>>) -> F
     let copy = gtk::Button::with_label("Copy to...");
     let move_to = gtk::Button::with_label("Move to...");
     let replace_symlink = gtk::Button::with_label("Replace with Symlink");
+    let compare = gtk::Button::with_label("Compare Selected");
 
     bar.append(&label);
     bar.append(&show_duplicates);
@@ -436,6 +438,7 @@ pub(crate) fn build_file_action_bar(ui_state: Rc<RefCell<Option<UiState>>>) -> F
     bar.append(&copy);
     bar.append(&move_to);
     bar.append(&replace_symlink);
+    bar.append(&compare);
 
     let buttons = FileActionButtons {
         trash: trash.clone(),
@@ -443,6 +446,7 @@ pub(crate) fn build_file_action_bar(ui_state: Rc<RefCell<Option<UiState>>>) -> F
         copy: copy.clone(),
         move_to: move_to.clone(),
         replace_symlink: replace_symlink.clone(),
+        compare: compare.clone(),
     };
 
     let ui_state_for_actions = ui_state.clone();
@@ -528,6 +532,11 @@ pub(crate) fn build_file_action_bar(ui_state: Rc<RefCell<Option<UiState>>>) -> F
         });
     });
 
+    let ui_state_for_actions = ui_state.clone();
+    compare.connect_clicked(move |_| {
+        open_compare_window(&ui_state_for_actions);
+    });
+
     let ui_state_for_toggle = ui_state.clone();
     show_duplicates.connect_toggled(move |cb| {
         let mut state = ui_state_for_toggle.borrow_mut();
@@ -564,6 +573,7 @@ pub(crate) fn update_action_bar_state(state: &mut UiState) {
         .action_bar_buttons
         .replace_symlink
         .set_sensitive(enabled);
+    state.action_bar_buttons.compare.set_sensitive(enabled);
 }
 
 fn apply_to_selected<F>(ui_state: &Rc<RefCell<Option<UiState>>>, mut action: F)
@@ -686,6 +696,221 @@ fn update_status(
         Ok(msg) => state.status_label.set_text(&format!("Status: {msg}")),
         Err(err) => state.status_label.set_text(&format!("Status: {err}")),
     }
+}
+
+fn open_compare_window(ui_state: &Rc<RefCell<Option<UiState>>>) {
+    let (db_path, root_path, selections) = {
+        let state_ref = ui_state.borrow();
+        let Some(state) = state_ref.as_ref() else {
+            return;
+        };
+        let active_id = match state.active_fileset_id {
+            Some(id) => id,
+            None => return,
+        };
+        let entry = match state.filesets.iter().find(|entry| entry.id == active_id) {
+            Some(entry) => entry,
+            None => return,
+        };
+        let mut grouped = std::collections::BTreeMap::<PathBuf, Vec<i64>>::new();
+        for (id, selected) in &state.selected_files {
+            grouped.entry(selected.parent_rel_path.clone()).or_default().push(*id);
+        }
+        (entry.db_path.clone(), entry.metadata.root_path.clone(), grouped)
+    };
+
+    if selections.is_empty() {
+        update_status(ui_state, Err("No selected files to compare".to_string()));
+        return;
+    }
+
+    let store = match dupdupninja_core::db::SqliteScanStore::open(&db_path) {
+        Ok(store) => store,
+        Err(err) => {
+            update_status(
+                ui_state,
+                Err(format!("Failed to open fileset: {err}")),
+            );
+            return;
+        }
+    };
+
+    let notebook = gtk::Notebook::new();
+    for (parent_rel, matches) in selections {
+        let parent = match store.get_file_by_path(&parent_rel).ok().flatten() {
+            Some(parent) => parent,
+            None => continue,
+        };
+        let mut match_records = Vec::new();
+        for id in matches {
+            if let Some(rec) = store.get_file_by_id(id).ok().flatten() {
+                match_records.push(rec);
+            }
+        }
+        if match_records.is_empty() {
+            continue;
+        }
+
+        let tab_title = parent
+            .path
+            .file_name()
+            .and_then(|v| v.to_str())
+            .unwrap_or("Parent");
+        let tab = build_compare_tab(&root_path, &parent, &match_records);
+        let tab_label = gtk::Label::new(Some(tab_title));
+        notebook.append_page(&tab, Some(&tab_label));
+    }
+
+    if notebook.n_pages() == 0 {
+        update_status(ui_state, Err("No metadata available to compare".to_string()));
+        return;
+    }
+
+    let window = gtk::Window::builder()
+        .title("Compare selected files")
+        .default_width(1000)
+        .default_height(640)
+        .child(&notebook)
+        .build();
+    if let Some(parent_window) = active_window(ui_state) {
+        window.set_transient_for(Some(&parent_window));
+    }
+    window.present();
+}
+
+fn build_compare_tab(
+    root_path: &Path,
+    parent: &MediaFileRecord,
+    matches: &[MediaFileRecord],
+) -> gtk::Widget {
+    let fields = metadata_fields();
+    let parent_title = format!("Parent: {}", display_name(parent));
+    let parent_column = build_metadata_column(
+        &parent_title,
+        &fields,
+        parent,
+        root_path,
+        true,
+    );
+
+    let matches_box = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+    for file in matches {
+        let title = display_name(file);
+        let column = build_metadata_column(&title, &fields, file, root_path, false);
+        matches_box.append(&column);
+    }
+
+    let matches_scroller = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Automatic)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .child(&matches_box)
+        .build();
+    matches_scroller.set_hexpand(true);
+    matches_scroller.set_vexpand(true);
+
+    let container = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    container.append(&parent_column);
+    container.append(&matches_scroller);
+    container.upcast()
+}
+
+fn build_metadata_column(
+    title: &str,
+    fields: &[(String, MetadataField)],
+    record: &MediaFileRecord,
+    root_path: &Path,
+    include_labels: bool,
+) -> gtk::Widget {
+    let column = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    column.set_margin_top(12);
+    column.set_margin_bottom(12);
+    column.set_margin_start(12);
+    column.set_margin_end(12);
+
+    let header = gtk::Label::new(Some(title));
+    header.set_xalign(0.0);
+    header.add_css_class("title-4");
+    column.append(&header);
+
+    for (label, field) in fields {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let label_widget = gtk::Label::new(Some(label));
+        label_widget.set_xalign(0.0);
+        label_widget.set_width_chars(16);
+        label_widget.add_css_class("dim-label");
+        if !include_labels {
+            label_widget.set_visible(false);
+        }
+        let value = metadata_value(field, record, root_path);
+        let value_label = gtk::Label::new(Some(&value));
+        value_label.set_xalign(0.0);
+        value_label.set_wrap(true);
+        value_label.set_selectable(true);
+        row.append(&label_widget);
+        row.append(&value_label);
+        column.append(&row);
+    }
+
+    column.upcast()
+}
+
+#[derive(Clone, Copy)]
+enum MetadataField {
+    Path,
+    Size,
+    Modified,
+    FileType,
+    Blake3,
+    Sha256,
+    Ffmpeg,
+}
+
+fn metadata_fields() -> Vec<(String, MetadataField)> {
+    vec![
+        ("Path".to_string(), MetadataField::Path),
+        ("Size".to_string(), MetadataField::Size),
+        ("Modified".to_string(), MetadataField::Modified),
+        ("File Type".to_string(), MetadataField::FileType),
+        ("Blake3".to_string(), MetadataField::Blake3),
+        ("SHA-256".to_string(), MetadataField::Sha256),
+        ("FFmpeg metadata".to_string(), MetadataField::Ffmpeg),
+    ]
+}
+
+fn metadata_value(field: &MetadataField, record: &MediaFileRecord, root_path: &Path) -> String {
+    match field {
+        MetadataField::Path => {
+            let full = root_path.join(&record.path);
+            full.to_string_lossy().to_string()
+        }
+        MetadataField::Size => format_bytes(record.size_bytes),
+        MetadataField::Modified => record
+            .modified_at
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| format!("{}s", d.as_secs()))
+            .unwrap_or_else(|| "Unknown".to_string()),
+        MetadataField::FileType => record.file_type.clone().unwrap_or_default(),
+        MetadataField::Blake3 => record
+            .blake3
+            .as_ref()
+            .map(hash_to_hex)
+            .unwrap_or_default(),
+        MetadataField::Sha256 => record
+            .sha256
+            .as_ref()
+            .map(hash_to_hex)
+            .unwrap_or_default(),
+        MetadataField::Ffmpeg => record.ffmpeg_metadata.clone().unwrap_or_default(),
+    }
+}
+
+fn display_name(record: &MediaFileRecord) -> String {
+    record
+        .path
+        .file_name()
+        .and_then(|v| v.to_str())
+        .unwrap_or("(unknown)")
+        .to_string()
 }
 
 fn format_bytes(bytes: u64) -> String {
