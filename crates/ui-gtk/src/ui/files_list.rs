@@ -866,7 +866,7 @@ fn build_compare_tab(
 
     let matches_scroller = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Automatic)
-        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .vscrollbar_policy(gtk::PolicyType::Never)
         .child(&matches_box)
         .build();
     matches_scroller.set_hexpand(true);
@@ -879,13 +879,18 @@ fn build_compare_tab(
         .build();
     parent_scroller.set_hexpand(false);
     parent_scroller.set_vexpand(true);
-    let adj = matches_scroller.vadjustment();
-    parent_scroller.set_vadjustment(Some(&adj));
 
     let container = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     container.append(&parent_scroller);
     container.append(&matches_scroller);
-    container.upcast()
+    let outer_scroller = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .vscrollbar_policy(gtk::PolicyType::Automatic)
+        .child(&container)
+        .build();
+    outer_scroller.set_hexpand(true);
+    outer_scroller.set_vexpand(true);
+    outer_scroller.upcast()
 }
 
 fn build_metadata_column(
