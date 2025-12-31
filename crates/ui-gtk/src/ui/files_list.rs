@@ -922,12 +922,16 @@ fn build_metadata_column(
         row.append(&label_widget);
         match row_def {
             CompareRow::Field(_, field) => {
-                let value = metadata_value(field, &file.record, root_path);
-                let value_label = gtk::Label::new(Some(&value));
-                value_label.set_xalign(0.0);
-                value_label.set_wrap(true);
-                value_label.set_selectable(true);
-                row.append(&value_label);
+                if matches!(field, MetadataField::Ffmpeg) {
+                    row.append(&ffmpeg_metadata_widget(&file.record));
+                } else {
+                    let value = metadata_value(field, &file.record, root_path);
+                    let value_label = gtk::Label::new(Some(&value));
+                    value_label.set_xalign(0.0);
+                    value_label.set_wrap(true);
+                    value_label.set_selectable(true);
+                    row.append(&value_label);
+                }
             }
             CompareRow::Snapshot(index) => {
                 row.append(&snapshot_widget(&file.snapshots, *index));
@@ -1026,6 +1030,32 @@ fn metadata_value(field: &MetadataField, record: &MediaFileRecord, root_path: &P
             .unwrap_or_default(),
         MetadataField::Ffmpeg => record.ffmpeg_metadata.clone().unwrap_or_default(),
     }
+}
+
+fn ffmpeg_metadata_widget(record: &MediaFileRecord) -> gtk::Widget {
+    let Some(text) = record.ffmpeg_metadata.as_deref() else {
+        let label = gtk::Label::new(Some("No metadata"));
+        label.set_xalign(0.0);
+        return label.upcast();
+    };
+
+    let expander = gtk::Expander::new(Some("Show FFmpeg metadata"));
+    expander.set_expanded(false);
+
+    let buffer = gtk::TextBuffer::new(None);
+    buffer.set_text(text);
+    let text_view = gtk::TextView::with_buffer(&buffer);
+    text_view.set_editable(false);
+    text_view.set_wrap_mode(gtk::WrapMode::WordChar);
+    text_view.set_monospace(true);
+
+    let scroller = gtk::ScrolledWindow::new();
+    scroller.set_min_content_height(120);
+    scroller.set_propagate_natural_height(true);
+    scroller.set_child(Some(&text_view));
+
+    expander.set_child(Some(&scroller));
+    expander.upcast()
 }
 
 fn display_name(record: &MediaFileRecord) -> String {
