@@ -2,9 +2,9 @@ use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use adw::prelude::*;
 use gtk4 as gtk;
 use gtk::glib::prelude::Cast;
-use gtk::prelude::*;
 
 use dupdupninja_core::models::{FileListRow, FileSnapshotRecord};
 use dupdupninja_core::MediaFileRecord;
@@ -776,17 +776,30 @@ fn open_compare_window(ui_state: &Rc<RefCell<Option<UiState>>>) {
         return;
     }
 
-    let window = gtk::Window::builder()
+    let header = adw::HeaderBar::builder()
+        .title_widget(&adw::WindowTitle::new("Compare selected files", ""))
+        .show_end_title_buttons(true)
+        .show_start_title_buttons(true)
+        .build();
+
+    let window = adw::Window::builder()
         .title("Compare selected files")
         .default_width(900)
         .default_height(600)
-        .resizable(true)
-        .decorated(true)
-        .child(&notebook)
+        .content(&notebook)
         .build();
+    window.set_titlebar(Some(&header));
+
     if let Some(parent_window) = active_window(ui_state) {
         window.set_transient_for(Some(&parent_window));
+        let (width, height) = parent_window.default_size();
+        if width > 0 && height > 0 {
+            let new_width = (width as f64 * 0.8).round().max(480.0) as i32;
+            let new_height = (height as f64 * 0.8).round().max(360.0) as i32;
+            window.set_default_size(new_width, new_height);
+        }
     }
+
     window.present();
 }
 
