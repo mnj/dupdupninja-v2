@@ -650,9 +650,10 @@ where
             Some(entry) => entry,
             None => return,
         };
+        let root = resolve_root_path(&entry.metadata.root_path, entry.metadata.root_parent_path.as_ref());
         let mut out = Vec::new();
         for selected in state.selected_files.values() {
-            out.push(entry.metadata.root_path.join(&selected.rel_path));
+            out.push(root.join(&selected.rel_path));
         }
         out
     };
@@ -700,11 +701,12 @@ where
             Some(entry) => entry,
             None => return,
         };
+        let root = resolve_root_path(&entry.metadata.root_path, entry.metadata.root_parent_path.as_ref());
         let mut out = Vec::new();
         for selected in state.selected_files.values() {
             out.push((
-                entry.metadata.root_path.join(&selected.rel_path),
-                entry.metadata.root_path.join(&selected.parent_rel_path),
+                root.join(&selected.rel_path),
+                root.join(&selected.parent_rel_path),
             ));
         }
         out
@@ -730,6 +732,16 @@ where
             let db_path = entry.db_path.clone();
             crate::ui::load_fileset_rows(state, &db_path);
         }
+    }
+}
+
+fn resolve_root_path(root: &Path, root_parent: Option<&PathBuf>) -> PathBuf {
+    if root.is_absolute() {
+        root.to_path_buf()
+    } else if let Some(parent) = root_parent {
+        parent.join(root)
+    } else {
+        root.to_path_buf()
     }
 }
 
