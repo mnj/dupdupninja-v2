@@ -781,22 +781,27 @@ fn open_compare_window(ui_state: &Rc<RefCell<Option<UiState>>>) {
         .show_end_title_buttons(true)
         .show_start_title_buttons(true)
         .build();
+    let toolbar = adw::ToolbarView::new();
+    toolbar.add_top_bar(&header);
+    toolbar.set_content(Some(&notebook));
 
     let window = adw::Window::builder()
         .title("Compare selected files")
         .default_width(900)
         .default_height(600)
-        .content(&notebook)
+        .content(&toolbar)
         .build();
-    window.set_titlebar(Some(&header));
 
     if let Some(parent_window) = active_window(ui_state) {
-        window.set_transient_for(Some(&parent_window));
-        let (width, height) = parent_window.default_size();
-        if width > 0 && height > 0 {
-            let new_width = (width as f64 * 0.8).round().max(480.0) as i32;
-            let new_height = (height as f64 * 0.8).round().max(360.0) as i32;
-            window.set_default_size(new_width, new_height);
+        let window_as_gtk = window.clone().upcast::<gtk::Window>();
+        if !parent_window.eq(&window_as_gtk) {
+            window.set_transient_for(Some(&parent_window));
+            let (width, height) = parent_window.default_size();
+            if width > 0 && height > 0 {
+                let new_width = (width as f64 * 0.8).round().max(480.0) as i32;
+                let new_height = (height as f64 * 0.8).round().max(360.0) as i32;
+                window.set_default_size(new_width, new_height);
+            }
         }
     }
 
