@@ -778,8 +778,9 @@ fn open_compare_window(ui_state: &Rc<RefCell<Option<UiState>>>) {
 
     let window = gtk::Window::builder()
         .title("Compare selected files")
-        .default_width(1000)
-        .default_height(640)
+        .default_width(900)
+        .default_height(600)
+        .resizable(true)
         .child(&notebook)
         .build();
     if let Some(parent_window) = active_window(ui_state) {
