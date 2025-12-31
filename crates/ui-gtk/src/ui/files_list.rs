@@ -388,6 +388,7 @@ pub(crate) fn build_file_action_bar(ui_state: Rc<RefCell<Option<UiState>>>) -> F
     let delete = gtk::Button::with_label("Delete Permanently");
     let copy = gtk::Button::with_label("Copy to...");
     let move_to = gtk::Button::with_label("Move to...");
+    let replace_symlink = gtk::Button::with_label("Replace with Symlink");
 
     bar.append(&label);
     bar.append(&show_duplicates);
@@ -395,12 +396,14 @@ pub(crate) fn build_file_action_bar(ui_state: Rc<RefCell<Option<UiState>>>) -> F
     bar.append(&delete);
     bar.append(&copy);
     bar.append(&move_to);
+    bar.append(&replace_symlink);
 
     let buttons = FileActionButtons {
         trash: trash.clone(),
         delete: delete.clone(),
         copy: copy.clone(),
         move_to: move_to.clone(),
+        replace_symlink: replace_symlink.clone(),
     };
 
     let ui_state_for_actions = ui_state.clone();
@@ -466,6 +469,37 @@ pub(crate) fn build_file_action_bar(ui_state: Rc<RefCell<Option<UiState>>>) -> F
         }
     });
 
+    let ui_state_for_actions = ui_state.clone();
+    replace_symlink.connect_clicked(move |_| {
+        let ui_state_for_dialog = ui_state_for_actions.clone();
+        if let Some(window) = active_window(&ui_state_for_dialog) {
+            let dialog = gtk::FileDialog::new();
+            dialog.set_title("Replace selected files with symlink to...");
+            dialog.open(Some(&window), None::<&gtk::gio::Cancellable>, move |res| {
+                if let Ok(file) = res {
+                    if let Some(target) = file.path() {
+                        apply_to_selected(&ui_state_for_dialog, |path| {
+                            if path == &target {
+                                return Ok("Skipped target file".to_string());
+                            }
+                            std::fs::remove_file(path).map_err(|e| e.to_string())?;
+                            #[cfg(unix)]
+                            {
+                                std::os::unix::fs::symlink(&target, path)
+                                    .map(|_| "Replaced with symlink".to_string())
+                                    .map_err(|e| e.to_string())
+                            }
+                            #[cfg(not(unix))]
+                            {
+                                Err("Symlink replacement is only supported on Unix".to_string())
+                            }
+                        });
+                    }
+                }
+            });
+        }
+    });
+
     let ui_state_for_toggle = ui_state.clone();
     show_duplicates.connect_toggled(move |cb| {
         let mut state = ui_state_for_toggle.borrow_mut();
@@ -498,6 +532,10 @@ pub(crate) fn update_action_bar_state(state: &mut UiState) {
     state.action_bar_buttons.delete.set_sensitive(enabled);
     state.action_bar_buttons.copy.set_sensitive(enabled);
     state.action_bar_buttons.move_to.set_sensitive(enabled);
+    state
+        .action_bar_buttons
+        .replace_symlink
+        .set_sensitive(enabled);
 }
 
 fn apply_to_selected<F>(ui_state: &Rc<RefCell<Option<UiState>>>, mut action: F)

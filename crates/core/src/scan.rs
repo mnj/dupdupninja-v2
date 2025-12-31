@@ -176,6 +176,7 @@ where
         };
 
         bytes_seen = bytes_seen.saturating_add(md.len());
+        let linked_file = is_linked_file(&entry, &md);
         let mut rec = MediaFileRecord {
             file_id: None,
             path: relative_to_root(&config.root, &path).unwrap_or(path.clone()),
@@ -195,7 +196,7 @@ where
 
         rec.ffmpeg_metadata = ffprobe_metadata(&path);
 
-        if config.hash_files {
+        if config.hash_files && !linked_file {
             match blake3_file(&path) {
                 Ok(hash) => {
                     rec.blake3 = Some(hash);
@@ -252,6 +253,30 @@ where
 
     update_fileset_status(store, config, "completed");
     Ok(ScanResult { stats })
+}
+
+fn is_linked_file(entry: &walkdir::DirEntry, md: &std::fs::Metadata) -> bool {
+    if entry.file_type().is_symlink() {
+        return true;
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if md.nlink() > 1 {
+            return true;
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if md.number_of_links() > 1 {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn ffprobe_metadata(path: &Path) -> Option<String> {
