@@ -781,6 +781,7 @@ fn open_compare_window(ui_state: &Rc<RefCell<Option<UiState>>>) {
         .default_width(900)
         .default_height(600)
         .resizable(true)
+        .decorated(true)
         .child(&notebook)
         .build();
     if let Some(parent_window) = active_window(ui_state) {
