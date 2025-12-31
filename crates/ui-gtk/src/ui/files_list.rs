@@ -650,7 +650,14 @@ where
             Some(entry) => entry,
             None => return,
         };
-        let root = resolve_root_path(&entry.metadata.root_path, entry.metadata.root_parent_path.as_ref());
+        let root = resolve_root_path(&entry.metadata);
+        if root.as_os_str().is_empty() {
+            update_status(
+                ui_state,
+                Err("Fileset root path is missing. Please rescan.".to_string()),
+            );
+            return;
+        }
         let mut out = Vec::new();
         for selected in state.selected_files.values() {
             out.push(root.join(&selected.rel_path));
@@ -701,7 +708,14 @@ where
             Some(entry) => entry,
             None => return,
         };
-        let root = resolve_root_path(&entry.metadata.root_path, entry.metadata.root_parent_path.as_ref());
+        let root = resolve_root_path(&entry.metadata);
+        if root.as_os_str().is_empty() {
+            update_status(
+                ui_state,
+                Err("Fileset root path is missing. Please rescan.".to_string()),
+            );
+            return;
+        }
         let mut out = Vec::new();
         for selected in state.selected_files.values() {
             out.push((
@@ -735,14 +749,27 @@ where
     }
 }
 
-fn resolve_root_path(root: &Path, root_parent: Option<&PathBuf>) -> PathBuf {
-    if root.is_absolute() {
-        root.to_path_buf()
-    } else if let Some(parent) = root_parent {
-        parent.join(root)
-    } else {
-        root.to_path_buf()
+fn resolve_root_path(meta: &dupdupninja_core::FilesetMetadata) -> PathBuf {
+    let root = &meta.root_path;
+    if !root.as_os_str().is_empty() {
+        if root.is_absolute() {
+            return root.to_path_buf();
+        }
+        if let Some(parent) = meta.root_parent_path.as_ref() {
+            return parent.join(root);
+        }
+        return root.to_path_buf();
     }
+
+    if let Some(parent) = meta.root_parent_path.as_ref() {
+        let guess = parent.join(&meta.name);
+        if guess.exists() {
+            return guess;
+        }
+        return parent.to_path_buf();
+    }
+
+    PathBuf::new()
 }
 
 fn active_window(ui_state: &Rc<RefCell<Option<UiState>>>) -> Option<gtk::Window> {

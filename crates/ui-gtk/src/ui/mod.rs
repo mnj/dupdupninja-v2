@@ -1095,9 +1095,14 @@ fn set_fileset_scanning(state: &mut UiState, fileset_id: u64, scanning: bool) {
 #[cfg(all(target_os = "linux", feature = "gtk"))]
 fn set_fileset_status(state: &mut UiState, fileset_id: u64, status: &str) {
     if let Some(entry) = state.filesets.iter_mut().find(|entry| entry.id == fileset_id) {
-        entry.metadata.status = status.to_string();
         if let Ok(store) = dupdupninja_core::db::SqliteScanStore::open(&entry.db_path) {
+            if let Ok(Some(meta)) = store.get_fileset_metadata() {
+                entry.metadata = meta;
+            }
+            entry.metadata.status = status.to_string();
             let _ = store.set_fileset_metadata(&entry.metadata);
+        } else {
+            entry.metadata.status = status.to_string();
         }
         apply_fileset_metadata(&entry.action_row, &entry.metadata);
         if state.active_fileset_id == Some(fileset_id) {
