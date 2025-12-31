@@ -517,29 +517,45 @@ pub(crate) fn build_file_action_bar(ui_state: Rc<RefCell<Option<UiState>>>) -> F
     let ui_state_for_actions = ui_state.clone();
     replace_symlink.connect_clicked(move |_| {
         apply_to_selected_with_parent(&ui_state_for_actions, |path, parent_path| {
+            println!(
+                "ddn: symlink replace requested: target={} source={}",
+                parent_path.display(),
+                path.display()
+            );
             if path == parent_path {
+                println!("ddn: skipped, target equals source");
                 return Ok("Skipped parent file".to_string());
             }
             if !parent_path.exists() {
+                println!("ddn: parent missing, aborting");
                 return Err("Parent file no longer exists".to_string());
             }
             #[cfg(unix)]
             {
                 let backup = unique_backup_path(path);
+                println!("ddn: renaming to backup {}", backup.display());
                 std::fs::rename(path, &backup).map_err(|e| e.to_string())?;
+                println!(
+                    "ddn: creating symlink {} -> {}",
+                    path.display(),
+                    parent_path.display()
+                );
                 match std::os::unix::fs::symlink(parent_path, path) {
                     Ok(_) => {
                         if let Ok(meta) = std::fs::symlink_metadata(path) {
                             if meta.file_type().is_symlink() {
+                                println!("ddn: symlink created, removing backup");
                                 let _ = std::fs::remove_file(&backup);
                                 return Ok("Replaced with symlink".to_string());
                             }
                         }
+                        println!("ddn: verification failed, restoring backup");
                         let _ = std::fs::remove_file(path);
                         let _ = std::fs::rename(&backup, path);
                         Err("Symlink verification failed".to_string())
                     }
                     Err(err) => {
+                        println!("ddn: symlink failed: {err}, restoring backup");
                         let _ = std::fs::rename(&backup, path);
                         Err(err.to_string())
                     }
@@ -547,6 +563,7 @@ pub(crate) fn build_file_action_bar(ui_state: Rc<RefCell<Option<UiState>>>) -> F
             }
             #[cfg(not(unix))]
             {
+                println!("ddn: symlink not supported on this OS");
                 Err("Symlink replacement is only supported on Unix".to_string())
             }
         });
