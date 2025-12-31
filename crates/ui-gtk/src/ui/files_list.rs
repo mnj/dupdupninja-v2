@@ -5,6 +5,7 @@ use std::rc::Rc;
 use adw::prelude::*;
 use gtk4 as gtk;
 use gtk::glib::prelude::Cast;
+use gtk::prelude::GtkWindowExt;
 
 use dupdupninja_core::models::{FileListRow, FileSnapshotRecord};
 use dupdupninja_core::MediaFileRecord;
@@ -785,10 +786,11 @@ fn open_compare_window(ui_state: &Rc<RefCell<Option<UiState>>>) {
     toolbar.add_top_bar(&header);
     toolbar.set_content(Some(&notebook));
 
+    let (default_width, default_height) = compare_window_default_size(ui_state);
     let window = adw::Window::builder()
         .title("Compare selected files")
-        .default_width(900)
-        .default_height(600)
+        .default_width(default_width)
+        .default_height(default_height)
         .content(&toolbar)
         .build();
 
@@ -796,16 +798,38 @@ fn open_compare_window(ui_state: &Rc<RefCell<Option<UiState>>>) {
         let window_as_gtk = window.clone().upcast::<gtk::Window>();
         if !parent_window.eq(&window_as_gtk) {
             window.set_transient_for(Some(&parent_window));
-            let (width, height) = parent_window.default_size();
-            if width > 0 && height > 0 {
-                let new_width = (width as f64 * 0.8).round().max(480.0) as i32;
-                let new_height = (height as f64 * 0.8).round().max(360.0) as i32;
-                window.set_default_size(new_width, new_height);
-            }
         }
     }
 
     window.present();
+}
+
+fn compare_window_default_size(ui_state: &Rc<RefCell<Option<UiState>>>) -> (i32, i32) {
+    let min_width = 480.0;
+    let min_height = 360.0;
+    let mut width = 900.0;
+    let mut height = 600.0;
+
+    if let Some(parent_window) = active_window(ui_state) {
+        let (parent_w, parent_h) = parent_window.default_size();
+        if parent_w > 0 && parent_h > 0 {
+            width = (parent_w as f64 * 0.8).round();
+            height = (parent_h as f64 * 0.8).round();
+        } else if let Some(surface) = parent_window.surface() {
+            if let Some(display) = gtk::gdk::Display::default() {
+                if let Some(monitor) = display.monitor_at_surface(&surface) {
+                    let geo = monitor.geometry();
+                    width = (geo.width() as f64 * 0.7).round();
+                    height = (geo.height() as f64 * 0.7).round();
+                }
+            }
+        }
+    }
+
+    (
+        width.max(min_width) as i32,
+        height.max(min_height) as i32,
+    )
 }
 
 struct CompareFile {
