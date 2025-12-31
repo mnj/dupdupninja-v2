@@ -738,6 +738,8 @@ fn open_compare_window(ui_state: &Rc<RefCell<Option<UiState>>>) {
     };
 
     let notebook = gtk::Notebook::new();
+    notebook.set_hexpand(true);
+    notebook.set_vexpand(true);
     for (parent_rel, matches) in selections {
         let parent = match store.get_file_by_path(&parent_rel).ok().flatten() {
             Some(parent) => parent,
@@ -793,6 +795,7 @@ fn open_compare_window(ui_state: &Rc<RefCell<Option<UiState>>>) {
         .default_height(default_height)
         .content(&toolbar)
         .build();
+    window.set_resizable(true);
 
     if let Some(parent_window) = active_window(ui_state) {
         let window_as_gtk = window.clone().upcast::<gtk::Window>();
@@ -811,7 +814,8 @@ fn compare_window_default_size(ui_state: &Rc<RefCell<Option<UiState>>>) -> (i32,
     let mut height = 600.0;
 
     if let Some(parent_window) = active_window(ui_state) {
-        let (parent_w, parent_h) = parent_window.default_size();
+        let parent_w = parent_window.width();
+        let parent_h = parent_window.height();
         if parent_w > 0 && parent_h > 0 {
             width = (parent_w as f64 * 0.8).round();
             height = (parent_h as f64 * 0.8).round();
