@@ -890,6 +890,7 @@ fn build_compare_tab(
         .build();
     outer_scroller.set_hexpand(true);
     outer_scroller.set_vexpand(true);
+    outer_scroller.set_propagate_natural_height(true);
     outer_scroller.upcast()
 }
 
@@ -989,14 +990,14 @@ fn snapshot_widget(snapshots: &[FileSnapshotRecord], index: usize) -> gtk::Widge
         let bytes = gtk::glib::Bytes::from(&snapshot.image_avif);
         if let Ok(texture) = gtk::gdk::Texture::from_bytes(&bytes) {
             let picture = gtk::Picture::for_paintable(&texture);
-            picture.set_can_shrink(true);
+            picture.set_can_shrink(false);
             picture.set_content_fit(gtk::ContentFit::Contain);
             picture.set_size_request(160, 90);
             return picture.upcast();
         }
         if let Some(texture) = decode_avif_texture(&snapshot.image_avif) {
             let picture = gtk::Picture::for_paintable(&texture);
-            picture.set_can_shrink(true);
+            picture.set_can_shrink(false);
             picture.set_content_fit(gtk::ContentFit::Contain);
             picture.set_size_request(160, 90);
             return picture.upcast();
