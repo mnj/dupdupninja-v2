@@ -907,7 +907,7 @@ fn start_scan(
                             .file_name()
                             .and_then(|p| p.to_str())
                             .unwrap_or("file");
-                        format!("{step} • {file}")
+                        format!("{file} • {step}")
                     });
                 let text = format!(
                     "Status: Scanning {} ({} / {} files)",
