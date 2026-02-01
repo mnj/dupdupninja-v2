@@ -83,6 +83,7 @@ pub struct ScanProgress {
     pub total_files: u64,
     pub total_bytes: u64,
     pub current_path: PathBuf,
+    pub current_step: Option<String>,
 }
 
 pub fn scan_to_sqlite_with_progress<F>(
@@ -171,6 +172,22 @@ where
 
         stats.files_seen += 1;
         let path = entry.path().to_path_buf();
+        let mut emit_progress = |step: Option<&str>,
+                                 files_seen: u64,
+                                 files_hashed: u64,
+                                 files_skipped: u64,
+                                 bytes_seen: u64| {
+            on_progress(&ScanProgress {
+                files_seen,
+                files_hashed,
+                files_skipped,
+                bytes_seen,
+                total_files: totals.files,
+                total_bytes: totals.bytes,
+                current_path: path.clone(),
+                current_step: step.map(|s| s.to_string()),
+            });
+        };
         let md = match entry.metadata() {
             Ok(v) => v,
             Err(_) => {
@@ -195,6 +212,13 @@ where
             file_type: None,
         };
 
+        emit_progress(
+            Some("metadata"),
+            stats.files_seen,
+            stats.files_hashed,
+            stats.files_skipped,
+            bytes_seen,
+        );
         rec.file_type = match infer::get_from_path(&path) {
             Ok(Some(kind)) => Some(kind.mime_type().to_string()),
             Ok(None) => None,
@@ -205,6 +229,13 @@ where
 
         if config.perceptual_hashes && !linked_file && is_image_file(&path, rec.file_type.as_deref())
         {
+            emit_progress(
+                Some("hash: perceptual"),
+                stats.files_seen,
+                stats.files_hashed,
+                stats.files_skipped,
+                bytes_seen,
+            );
             if let Some((ahash, dhash, phash)) = image_hashes_from_path(&path) {
                 rec.ahash = Some(ahash);
                 rec.dhash = Some(dhash);
@@ -213,6 +244,13 @@ where
         }
 
         if config.hash_files && !linked_file {
+            emit_progress(
+                Some("hash: blake3"),
+                stats.files_seen,
+                stats.files_hashed,
+                stats.files_skipped,
+                bytes_seen,
+            );
             match blake3_file(&path) {
                 Ok(hash) => {
                     rec.blake3 = Some(hash);
@@ -221,6 +259,13 @@ where
                     stats.files_skipped += 1;
                 }
             }
+            emit_progress(
+                Some("hash: sha256"),
+                stats.files_seen,
+                stats.files_hashed,
+                stats.files_skipped,
+                bytes_seen,
+            );
             match sha256_file(&path) {
                 Ok(hash) => {
                     rec.sha256 = Some(hash);
@@ -243,6 +288,13 @@ where
                 .and_then(ffprobe_duration_ms);
 
             if is_video && duration_ms.is_some() {
+                emit_progress(
+                    Some("snapshotting"),
+                    stats.files_seen,
+                    stats.files_hashed,
+                    stats.files_skipped,
+                    bytes_seen,
+                );
                 let snapshots = video_snapshots_for_file(
                     &path,
                     duration_ms,
@@ -255,16 +307,13 @@ where
                 }
             }
         }
-
-        on_progress(&ScanProgress {
-            files_seen: stats.files_seen,
-            files_hashed: stats.files_hashed,
-            files_skipped: stats.files_skipped,
+        emit_progress(
+            Some("done"),
+            stats.files_seen,
+            stats.files_hashed,
+            stats.files_skipped,
             bytes_seen,
-            total_files: totals.files,
-            total_bytes: totals.bytes,
-            current_path: path,
-        });
+        );
     }
 
     update_fileset_status(store, config, "completed");

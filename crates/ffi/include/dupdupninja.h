@@ -14,7 +14,7 @@ typedef struct DupdupCancelToken DupdupCancelToken;
 
 enum {
   DUPDUPNINJA_FFI_ABI_MAJOR = 1,
-  DUPDUPNINJA_FFI_ABI_MINOR = 1,
+  DUPDUPNINJA_FFI_ABI_MINOR = 2,
   DUPDUPNINJA_FFI_ABI_PATCH = 0,
 };
 
@@ -39,6 +39,7 @@ typedef struct DupdupProgress {
   uint64_t total_files;
   uint64_t total_bytes;
   const char* current_path;
+  const char* current_step;
 } DupdupProgress;
 
 typedef void (*DupdupProgressCallback)(const DupdupProgress* progress, void* user_data);

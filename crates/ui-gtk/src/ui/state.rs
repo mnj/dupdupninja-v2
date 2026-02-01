@@ -36,6 +36,7 @@ pub(crate) struct SelectedFile {
 
 pub(crate) struct UiState {
     pub(crate) status_label: gtk::Label,
+    pub(crate) detail_status_label: gtk::Label,
     pub(crate) progress: gtk::ProgressBar,
     pub(crate) cancel_button: gtk::Button,
     pub(crate) cancel_token: Option<ScanCancelToken>,
@@ -65,7 +66,11 @@ pub(crate) struct UiState {
 pub(crate) enum UiUpdate {
     PrescanProgress { text: String },
     PrescanDone { totals: ScanTotals },
-    Progress { text: String, fraction: Option<f64> },
+    Progress {
+        text: String,
+        detail: Option<String>,
+        fraction: Option<f64>,
+    },
     Done { text: String },
     Cancelled { text: String, fileset_id: u64 },
     Error { text: String },

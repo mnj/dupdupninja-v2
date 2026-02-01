@@ -124,6 +124,7 @@ struct ProgressDto {
     total_files: u64,
     total_bytes: u64,
     current_path: String,
+    current_step: Option<String>,
 }
 
 impl From<&ScanProgress> for ProgressDto {
@@ -136,6 +137,7 @@ impl From<&ScanProgress> for ProgressDto {
             total_files: progress.total_files,
             total_bytes: progress.total_bytes,
             current_path: progress.current_path.display().to_string(),
+            current_step: progress.current_step.clone(),
         }
     }
 }
@@ -669,7 +671,7 @@ function renderJobs(jobs) {
       <td>${job.status}${job.error ? `: ${job.error}` : ''}</td>
       <td>${job.root}</td>
       <td>${job.db_path}</td>
-      <td>${job.progress ? `${job.progress.files_seen}/${job.progress.total_files} (${job.progress.current_path})` : '-'}</td>
+      <td>${job.progress ? `${job.progress.files_seen}/${job.progress.total_files} (${job.progress.current_step || 'scan'}: ${job.progress.current_path})` : '-'}</td>
       <td>${job.status === 'running' ? `<button data-cancel="${job.id}">Cancel</button>` : '-'}</td>
     `;
     jobsTable.appendChild(row);

@@ -548,6 +548,12 @@ pub fn run() {
         let status_label = gtk::Label::new(Some("Status: Idle"));
         status_label.set_xalign(0.0);
         status_label.set_hexpand(true);
+        let detail_status_label = gtk::Label::new(None);
+        detail_status_label.set_xalign(0.0);
+        detail_status_label.set_hexpand(true);
+        detail_status_label.set_visible(false);
+        detail_status_label.add_css_class("dim-label");
+        detail_status_label.set_wrap(true);
         let progress = gtk::ProgressBar::new();
         progress.set_fraction(0.0);
         progress.set_show_text(true);
@@ -556,7 +562,11 @@ pub fn run() {
         let cancel_button = gtk::Button::with_label("Cancel");
         cancel_button.set_sensitive(false);
         cancel_button.set_visible(false);
-        status_bar.append(&status_label);
+        let status_labels = gtk::Box::new(gtk::Orientation::Vertical, 2);
+        status_labels.set_hexpand(true);
+        status_labels.append(&status_label);
+        status_labels.append(&detail_status_label);
+        status_bar.append(&status_labels);
         status_bar.append(&progress);
         status_bar.append(&cancel_button);
 
@@ -566,6 +576,7 @@ pub fn run() {
         let (update_tx, update_rx) = std::sync::mpsc::channel::<UiUpdate>();
         *ui_state_for_activate.borrow_mut() = Some(UiState {
             status_label: status_label.clone(),
+            detail_status_label: detail_status_label.clone(),
             progress: progress.clone(),
             cancel_button: cancel_button.clone(),
             cancel_token: None,
@@ -627,6 +638,7 @@ pub fn run() {
                     match update {
                         UiUpdate::PrescanProgress { text } => {
                             state.status_label.set_text(&text);
+                            state.detail_status_label.set_visible(false);
                             state.progress.set_text(Some("Preparing..."));
                             state.progress.pulse();
                             state.progress.set_visible(true);
@@ -637,14 +649,25 @@ pub fn run() {
                             state.total_files = totals.files;
                             state.total_bytes = totals.bytes;
                             state.status_label.set_text("Status: Scanning...");
+                            state.detail_status_label.set_visible(false);
                             state.progress.set_fraction(0.0);
                             state.progress.set_text(Some("0%"));
                             state.progress.set_visible(true);
                             state.cancel_button.set_visible(true);
                             set_scan_actions_enabled(state, false);
                         }
-                        UiUpdate::Progress { text, fraction } => {
+                        UiUpdate::Progress {
+                            text,
+                            detail,
+                            fraction,
+                        } => {
                             state.status_label.set_text(&text);
+                            if let Some(detail) = detail {
+                                state.detail_status_label.set_text(&detail);
+                                state.detail_status_label.set_visible(true);
+                            } else {
+                                state.detail_status_label.set_visible(false);
+                            }
                             state.progress.set_visible(true);
                             state.cancel_button.set_visible(true);
                             set_scan_actions_enabled(state, false);
@@ -682,6 +705,7 @@ pub fn run() {
                         }
                         UiUpdate::Done { text } => {
                             state.status_label.set_text(&text);
+                            state.detail_status_label.set_visible(false);
                             state.progress.set_text(Some("Idle"));
                             state.progress.set_fraction(0.0);
                             state.cancel_button.set_sensitive(false);
@@ -710,6 +734,7 @@ pub fn run() {
                             fileset_id,
                         } => {
                             state.status_label.set_text(&text);
+                            state.detail_status_label.set_visible(false);
                             state.progress.set_text(Some("Idle"));
                             state.progress.set_fraction(0.0);
                             state.cancel_button.set_sensitive(false);
@@ -726,6 +751,7 @@ pub fn run() {
                         }
                         UiUpdate::Error { text } => {
                             state.status_label.set_text(&text);
+                            state.detail_status_label.set_visible(false);
                             state.progress.set_text(Some("Idle"));
                             state.progress.set_fraction(0.0);
                             state.cancel_button.set_sensitive(false);
@@ -872,6 +898,17 @@ fn start_scan(
                     .and_then(|p| p.file_name())
                     .and_then(|p| p.to_str())
                     .unwrap_or("folder");
+                let detail = progress_update
+                    .current_step
+                    .as_deref()
+                    .map(|step| {
+                        let file = progress_update
+                            .current_path
+                            .file_name()
+                            .and_then(|p| p.to_str())
+                            .unwrap_or("file");
+                        format!("{step} • {file}")
+                    });
                 let text = format!(
                     "Status: Scanning {} ({} / {} files)",
                     path,
@@ -883,7 +920,11 @@ fn start_scan(
                 } else {
                     None
                 };
-                let _ = update_tx.send(UiUpdate::Progress { text, fraction });
+                let _ = update_tx.send(UiUpdate::Progress {
+                    text,
+                    detail,
+                    fraction,
+                });
             },
         );
 

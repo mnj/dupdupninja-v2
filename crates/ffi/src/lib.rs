@@ -51,6 +51,7 @@ pub struct DupdupProgress {
     pub total_files: u64,
     pub total_bytes: u64,
     pub current_path: *const c_char,
+    pub current_step: *const c_char,
 }
 
 pub type DupdupProgressCallback = Option<extern "C" fn(progress: *const DupdupProgress, user_data: *mut libc::c_void)>;
@@ -73,7 +74,7 @@ pub type DupdupPrescanCallback =
     Option<extern "C" fn(progress: *const DupdupPrescanProgress, user_data: *mut libc::c_void)>;
 
 const FFI_ABI_MAJOR: u32 = 1;
-const FFI_ABI_MINOR: u32 = 1;
+const FFI_ABI_MINOR: u32 = 2;
 const FFI_ABI_PATCH: u32 = 0;
 
 #[repr(C)]
@@ -288,6 +289,10 @@ pub unsafe extern "C" fn dupdupninja_scan_folder_to_sqlite_with_progress(
         if let Some(cb) = progress_cb {
             let path = progress.current_path.to_string_lossy();
             let c_path = CString::new(path.as_ref()).unwrap_or_else(|_| CString::new("").unwrap());
+            let c_step = progress
+                .current_step
+                .as_deref()
+                .and_then(|step| CString::new(step).ok());
             let payload = DupdupProgress {
                 files_seen: progress.files_seen,
                 files_hashed: progress.files_hashed,
@@ -296,6 +301,7 @@ pub unsafe extern "C" fn dupdupninja_scan_folder_to_sqlite_with_progress(
                 total_files: progress.total_files,
                 total_bytes: progress.total_bytes,
                 current_path: c_path.as_ptr(),
+                current_step: c_step.as_ref().map(|s| s.as_ptr()).unwrap_or(std::ptr::null()),
             };
             cb(&payload, user_data);
         }
@@ -456,6 +462,10 @@ pub unsafe extern "C" fn dupdupninja_scan_folder_to_sqlite_with_progress_and_tot
         if let Some(cb) = progress_cb {
             let path = progress.current_path.to_string_lossy();
             let c_path = CString::new(path.as_ref()).unwrap_or_else(|_| CString::new("").unwrap());
+            let c_step = progress
+                .current_step
+                .as_deref()
+                .and_then(|step| CString::new(step).ok());
             let payload = DupdupProgress {
                 files_seen: progress.files_seen,
                 files_hashed: progress.files_hashed,
@@ -464,6 +474,7 @@ pub unsafe extern "C" fn dupdupninja_scan_folder_to_sqlite_with_progress_and_tot
                 total_files: progress.total_files,
                 total_bytes: progress.total_bytes,
                 current_path: c_path.as_ptr(),
+                current_step: c_step.as_ref().map(|s| s.as_ptr()).unwrap_or(std::ptr::null()),
             };
             cb(&payload, user_data);
         }
