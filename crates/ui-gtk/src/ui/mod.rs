@@ -117,7 +117,7 @@ pub fn run() {
                     let filters = gio::ListStore::new::<gtk::FileFilter>();
                     filters.append(&filter);
                     dialog.set_filters(Some(&filters));
-                    let fileset_dir = default_fileset_dir();
+                    let fileset_dir = effective_fileset_dir();
                     if fileset_dir.is_dir() {
                         dialog.set_initial_folder(Some(&gio::File::for_path(fileset_dir)));
                     } else {
@@ -265,6 +265,99 @@ pub fn run() {
                         let sizes = [128_u32, 256, 512, 768, 1024, 1536, 2048];
                         if let Some(state) = ui_state.borrow_mut().as_mut() {
                             state.snapshot_max_dim = sizes[idx];
+                        }
+                    }
+                ));
+
+                let fileset_title = gtk::Label::new(Some("Filesets"));
+                fileset_title.add_css_class("title-3");
+                fileset_title.set_xalign(0.0);
+                fileset_title.set_margin_top(12);
+                content.append(&fileset_title);
+
+                let settings_state = std::rc::Rc::new(std::cell::RefCell::new(load_settings()));
+                let fileset_row = gtk::Box::new(gtk::Orientation::Vertical, 6);
+                let fileset_label = gtk::Label::new(Some("Default fileset folder"));
+                fileset_label.set_xalign(0.0);
+                fileset_row.append(&fileset_label);
+
+                let fileset_controls = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+                let fileset_path = gtk::Label::new(None);
+                fileset_path.set_xalign(0.0);
+                fileset_path.set_hexpand(true);
+                fileset_controls.append(&fileset_path);
+                let change_button = gtk::Button::with_label("Change…");
+                let reset_button = gtk::Button::with_label("Reset");
+                fileset_controls.append(&change_button);
+                fileset_controls.append(&reset_button);
+                fileset_row.append(&fileset_controls);
+                content.append(&fileset_row);
+
+                let update_fileset_path_label = |label: &gtk::Label, settings: &GtkSettings| {
+                    label.set_text(&format_fileset_dir_label(settings));
+                };
+
+                {
+                    let settings = settings_state.borrow();
+                    update_fileset_path_label(&fileset_path, &settings);
+                    reset_button.set_sensitive(settings.fileset_dir.is_some());
+                }
+
+                change_button.connect_clicked(glib::clone!(
+                    #[weak]
+                    settings_window,
+                    #[strong]
+                    settings_state,
+                    #[weak]
+                    fileset_path,
+                    #[weak]
+                    reset_button,
+                    move |_| {
+                        let dialog = gtk::FileDialog::new();
+                        dialog.set_title("Select default fileset folder");
+                        let settings_state_for_dialog = settings_state.clone();
+                        if let Some(start_dir) = settings_state
+                            .borrow()
+                            .fileset_dir
+                            .clone()
+                            .or_else(|| Some(default_fileset_dir_base()))
+                        {
+                            if start_dir.is_dir() {
+                                dialog.set_initial_folder(Some(&gio::File::for_path(start_dir)));
+                            }
+                        }
+                        dialog.select_folder(
+                            Some(&settings_window),
+                            None::<&gio::Cancellable>,
+                            move |res| {
+                            if let Ok(folder) = res {
+                                if let Some(path) = folder.path() {
+                                    let mut settings = settings_state_for_dialog.borrow_mut();
+                                    settings.fileset_dir = Some(path);
+                                    if save_settings(&settings).is_ok() {
+                                        update_fileset_path_label(&fileset_path, &settings);
+                                        reset_button.set_sensitive(true);
+                                    }
+                                }
+                            }
+                        },
+                        );
+                    }
+                ));
+
+                reset_button.connect_clicked(glib::clone!(
+                    #[strong]
+                    settings_state,
+                    #[weak]
+                    fileset_path,
+                    #[weak]
+                    reset_button,
+                    move |_| {
+                        let mut settings = settings_state.borrow_mut();
+                        settings.fileset_dir = None;
+                        if save_settings(&settings).is_ok() {
+                            update_fileset_path_label(&fileset_path, &settings);
+                            reset_button.set_sensitive(false);
                         }
                     }
                 ));
@@ -729,6 +822,7 @@ fn start_scan(
             root: root.clone(),
             root_kind,
             hash_files: true,
+            perceptual_hashes: true,
             capture_snapshots,
             snapshots_per_video,
             snapshot_max_dim,
@@ -822,7 +916,7 @@ fn scan_db_path(root: &std::path::Path) -> std::path::PathBuf {
         .as_secs();
     let name = sanitize_fileset_name(root);
     let file_name = format!("{name}-{ts}.ddn");
-    let mut base = default_fileset_dir();
+    let mut base = effective_fileset_dir();
     if std::fs::create_dir_all(&base).is_err() {
         let mut fallback = std::env::temp_dir();
         fallback.push(file_name);
@@ -833,11 +927,81 @@ fn scan_db_path(root: &std::path::Path) -> std::path::PathBuf {
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]
-fn default_fileset_dir() -> std::path::PathBuf {
+fn default_fileset_dir_base() -> std::path::PathBuf {
     let mut base = gtk4::glib::user_data_dir();
     base.push("dupdupninja");
     base.push("filesets");
     base
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+#[derive(Debug, Clone, Default)]
+struct GtkSettings {
+    fileset_dir: Option<std::path::PathBuf>,
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn effective_fileset_dir() -> std::path::PathBuf {
+    load_settings()
+        .fileset_dir
+        .unwrap_or_else(default_fileset_dir_base)
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn settings_path() -> std::path::PathBuf {
+    let mut path = default_config_dir();
+    path.push("settings.txt");
+    path
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn load_settings() -> GtkSettings {
+    let mut settings = GtkSettings::default();
+    let path = settings_path();
+    let contents = match std::fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(_) => return settings,
+    };
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        if key.trim() == "fileset_dir" {
+            let value = value.trim();
+            if !value.is_empty() {
+                settings.fileset_dir = Some(std::path::PathBuf::from(value));
+            }
+        }
+    }
+    settings
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn save_settings(settings: &GtkSettings) -> std::io::Result<()> {
+    let path = settings_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut contents = String::new();
+    contents.push_str("# dupdupninja settings\n");
+    if let Some(dir) = &settings.fileset_dir {
+        contents.push_str("fileset_dir=");
+        contents.push_str(&dir.display().to_string());
+        contents.push('\n');
+    }
+    std::fs::write(path, contents)
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn format_fileset_dir_label(settings: &GtkSettings) -> String {
+    match &settings.fileset_dir {
+        Some(dir) => dir.display().to_string(),
+        None => format!("Default ({})", default_fileset_dir_base().display()),
+    }
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]

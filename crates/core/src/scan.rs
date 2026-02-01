@@ -1,3 +1,4 @@
+use std::convert::TryInto;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -9,6 +10,7 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
+use image_hasher::{HashAlg, HasherConfig};
 use walkdir::WalkDir;
 
 use crate::db::SqliteScanStore;
@@ -27,6 +29,7 @@ pub struct ScanConfig {
     pub root: PathBuf,
     pub root_kind: ScanRootKind,
     pub hash_files: bool,
+    pub perceptual_hashes: bool,
     pub capture_snapshots: bool,
     pub snapshots_per_video: u32,
     pub snapshot_max_dim: u32,
@@ -38,6 +41,7 @@ impl ScanConfig {
             root: root.into(),
             root_kind: ScanRootKind::Folder,
             hash_files: true,
+            perceptual_hashes: true,
             capture_snapshots: true,
             snapshots_per_video: 3,
             snapshot_max_dim: 1024,
@@ -184,6 +188,9 @@ where
             modified_at: md.modified().ok(),
             blake3: None,
             sha256: None,
+            ahash: None,
+            dhash: None,
+            phash: None,
             ffmpeg_metadata: None,
             file_type: None,
         };
@@ -195,6 +202,15 @@ where
         };
 
         rec.ffmpeg_metadata = ffprobe_metadata(&path);
+
+        if config.perceptual_hashes && !linked_file && is_image_file(&path, rec.file_type.as_deref())
+        {
+            if let Some((ahash, dhash, phash)) = image_hashes_from_path(&path) {
+                rec.ahash = Some(ahash);
+                rec.dhash = Some(dhash);
+                rec.phash = Some(phash);
+            }
+        }
 
         if config.hash_files && !linked_file {
             match blake3_file(&path) {
@@ -457,11 +473,18 @@ fn video_snapshots_for_file_inner(
             None => continue,
         };
 
+        let (ahash, dhash, phash) = image_hashes_from_avif(&image_avif)
+            .map(|(a, d, p)| (Some(a), Some(d), Some(p)))
+            .unwrap_or((None, None, None));
+
         snaps.push(FileSnapshotRecord {
             snapshot_index: idx,
             snapshot_count: snapshots_per_video,
             at_ms: (at_secs * 1000.0).round() as i64,
             duration_ms: Some(duration_ms),
+            ahash,
+            dhash,
+            phash,
             image_avif,
         });
     }
@@ -628,6 +651,66 @@ fn fileset_name_from_root(root: &Path) -> String {
         .filter(|name| !name.is_empty())
         .map(|name| name.to_string())
         .unwrap_or_else(|| root.to_string_lossy().to_string())
+}
+
+fn is_image_file(path: &Path, file_type: Option<&str>) -> bool {
+    if let Some(mime) = file_type {
+        if mime.starts_with("image/") {
+            return true;
+        }
+    }
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        return false;
+    };
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "jpg"
+            | "jpeg"
+            | "png"
+            | "gif"
+            | "bmp"
+            | "tiff"
+            | "webp"
+            | "avif"
+            | "heic"
+            | "heif"
+    )
+}
+
+fn image_hashes_from_path(path: &Path) -> Option<(u64, u64, u64)> {
+    let image = image::open(path).ok()?;
+    image_hashes_from_image(&image)
+}
+
+fn image_hashes_from_avif(bytes: &[u8]) -> Option<(u64, u64, u64)> {
+    let image = image::load_from_memory_with_format(bytes, image::ImageFormat::Avif).ok()?;
+    image_hashes_from_image(&image)
+}
+
+fn image_hashes_from_image(image: &image::DynamicImage) -> Option<(u64, u64, u64)> {
+    let ahash = hash_image_with_alg(image, HashAlg::Mean, false)?;
+    let dhash = hash_image_with_alg(image, HashAlg::Gradient, false)?;
+    let phash = hash_image_with_alg(image, HashAlg::Mean, true)?;
+    Some((ahash, dhash, phash))
+}
+
+fn hash_image_with_alg(image: &image::DynamicImage, alg: HashAlg, use_dct: bool) -> Option<u64> {
+    let mut config = HasherConfig::new().hash_alg(alg);
+    if use_dct {
+        config = config.preproc_dct();
+    }
+    let hasher = config.to_hasher();
+    let hash = hasher.hash_image(image);
+    hash_to_u64(&hash)
+}
+
+fn hash_to_u64(hash: &image_hasher::ImageHash) -> Option<u64> {
+    let bytes = hash.as_bytes();
+    if bytes.len() != 8 {
+        return None;
+    }
+    let arr: [u8; 8] = bytes.try_into().ok()?;
+    Some(u64::from_be_bytes(arr))
 }
 
 fn host_os_version() -> String {

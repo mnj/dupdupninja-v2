@@ -414,7 +414,7 @@ fn attach_column_menu(column_view: &gtk::ColumnView, columns: &[(&str, gtk::Colu
 }
 
 pub(crate) fn build_file_action_bar(ui_state: Rc<RefCell<Option<UiState>>>) -> FileActionBar {
-    let bar = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let bar = gtk::Box::new(gtk::Orientation::Vertical, 6);
     bar.set_margin_top(6);
     bar.set_margin_bottom(6);
     bar.set_margin_start(6);
@@ -423,6 +423,7 @@ pub(crate) fn build_file_action_bar(ui_state: Rc<RefCell<Option<UiState>>>) -> F
     let label = gtk::Label::new(Some("0 selected"));
     label.set_xalign(0.0);
     label.set_hexpand(true);
+    label.set_wrap(true);
 
     let show_duplicates = gtk::CheckButton::with_label("Show only duplicates");
 
@@ -433,14 +434,24 @@ pub(crate) fn build_file_action_bar(ui_state: Rc<RefCell<Option<UiState>>>) -> F
     let replace_symlink = gtk::Button::with_label("Replace with Symlink");
     let compare = gtk::Button::with_label("Compare Selected");
 
-    bar.append(&label);
-    bar.append(&show_duplicates);
-    bar.append(&trash);
-    bar.append(&delete);
-    bar.append(&copy);
-    bar.append(&move_to);
-    bar.append(&replace_symlink);
-    bar.append(&compare);
+    let label_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    label_row.append(&label);
+    bar.append(&label_row);
+
+    let actions_wrap = gtk::FlowBox::new();
+    actions_wrap.set_selection_mode(gtk::SelectionMode::None);
+    actions_wrap.set_column_spacing(8);
+    actions_wrap.set_row_spacing(8);
+    actions_wrap.set_min_children_per_line(1);
+
+    actions_wrap.append(&show_duplicates);
+    actions_wrap.append(&trash);
+    actions_wrap.append(&delete);
+    actions_wrap.append(&copy);
+    actions_wrap.append(&move_to);
+    actions_wrap.append(&replace_symlink);
+    actions_wrap.append(&compare);
+    bar.append(&actions_wrap);
 
     let buttons = FileActionButtons {
         trash: trash.clone(),

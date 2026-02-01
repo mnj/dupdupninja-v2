@@ -22,6 +22,9 @@ pub struct MediaFileRecord {
     pub modified_at: Option<SystemTime>,
     pub blake3: Option<[u8; 32]>,
     pub sha256: Option<[u8; 32]>,
+    pub ahash: Option<u64>,
+    pub dhash: Option<u64>,
+    pub phash: Option<u64>,
     pub ffmpeg_metadata: Option<String>,
     pub file_type: Option<String>,
 }
@@ -32,6 +35,9 @@ pub struct FileSnapshotRecord {
     pub snapshot_count: u32,
     pub at_ms: i64,
     pub duration_ms: Option<i64>,
+    pub ahash: Option<u64>,
+    pub dhash: Option<u64>,
+    pub phash: Option<u64>,
     pub image_avif: Vec<u8>,
 }
 
@@ -42,6 +48,9 @@ pub struct FileListRow {
     pub size_bytes: u64,
     pub blake3: Option<[u8; 32]>,
     pub sha256: Option<[u8; 32]>,
+    pub ahash: Option<u64>,
+    pub dhash: Option<u64>,
+    pub phash: Option<u64>,
     pub file_type: Option<String>,
 }
 
