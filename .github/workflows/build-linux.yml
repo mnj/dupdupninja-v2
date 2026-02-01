@@ -36,6 +36,7 @@ jobs:
             build-essential \
             ca-certificates \
             curl \
+            nasm \
             pkg-config \
             gcc-aarch64-linux-gnu \
             libgtk-4-dev \
