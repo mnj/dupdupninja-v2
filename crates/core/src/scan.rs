@@ -4,8 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    mpsc,
-    Arc,
+    mpsc, Arc,
 };
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -14,8 +13,8 @@ use image_hasher::{HashAlg, HasherConfig};
 use walkdir::WalkDir;
 
 use crate::db::SqliteScanStore;
-use crate::error::{Error, Result};
 use crate::drive;
+use crate::error::{Error, Result};
 use crate::hash::{blake3_file, sha256_file};
 use crate::models::{
     DriveMetadata, FileSnapshotRecord, FilesetMetadata, MediaFileRecord, ScanResult, ScanRootKind,
@@ -227,7 +226,9 @@ where
 
         rec.ffmpeg_metadata = ffprobe_metadata(&path);
 
-        if config.perceptual_hashes && !linked_file && is_image_file(&path, rec.file_type.as_deref())
+        if config.perceptual_hashes
+            && !linked_file
+            && is_image_file(&path, rec.file_type.as_deref())
         {
             emit_progress(
                 Some("hash: perceptual"),
@@ -282,10 +283,7 @@ where
 
         if config.capture_snapshots && config.snapshots_per_video > 0 {
             let is_video = is_video_file(&path, rec.file_type.as_deref());
-            let duration_ms = rec
-                .ffmpeg_metadata
-                .as_deref()
-                .and_then(ffprobe_duration_ms);
+            let duration_ms = rec.ffmpeg_metadata.as_deref().and_then(ffprobe_duration_ms);
 
             if is_video && duration_ms.is_some() {
                 emit_progress(
@@ -336,7 +334,7 @@ fn is_linked_file(entry: &walkdir::DirEntry, md: &std::fs::Metadata) -> bool {
     #[cfg(windows)]
     {
         use std::os::windows::fs::MetadataExt;
-        if md.number_of_links() > 1 {
+        if md.number_of_links().unwrap_or(1) > 1 {
             return true;
         }
     }
@@ -348,7 +346,9 @@ fn ffprobe_metadata(path: &Path) -> Option<String> {
     let (tx, rx) = mpsc::channel();
     let path = path.to_path_buf();
     thread::spawn(move || {
-        let result = std::panic::catch_unwind(|| ffprobe_metadata_inner(&path)).ok().flatten();
+        let result = std::panic::catch_unwind(|| ffprobe_metadata_inner(&path))
+            .ok()
+            .flatten();
         let _ = tx.send(result);
     });
 
@@ -512,15 +512,12 @@ fn video_snapshots_for_file_inner(
         }
 
         let per_snapshot_timeout = remaining.min(Duration::from_secs(10));
-        let image_avif = match ffmpeg_snapshot_avif_inner(
-            path,
-            at_secs,
-            snapshot_max_dim,
-            per_snapshot_timeout,
-        ) {
-            Some(bytes) => bytes,
-            None => continue,
-        };
+        let image_avif =
+            match ffmpeg_snapshot_avif_inner(path, at_secs, snapshot_max_dim, per_snapshot_timeout)
+            {
+                Some(bytes) => bytes,
+                None => continue,
+            };
 
         let (ahash, dhash, phash) = image_hashes_from_avif(&image_avif)
             .map(|(a, d, p)| (Some(a), Some(d), Some(p)))
@@ -713,16 +710,7 @@ fn is_image_file(path: &Path, file_type: Option<&str>) -> bool {
     };
     matches!(
         ext.to_ascii_lowercase().as_str(),
-        "jpg"
-            | "jpeg"
-            | "png"
-            | "gif"
-            | "bmp"
-            | "tiff"
-            | "webp"
-            | "avif"
-            | "heic"
-            | "heif"
+        "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tiff" | "webp" | "avif" | "heic" | "heif"
     )
 }
 
