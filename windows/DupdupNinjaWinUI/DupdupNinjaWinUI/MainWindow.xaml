@@ -29,18 +29,167 @@
                     </MenuFlyout>
                 </AppBarButton.Flyout>
             </AppBarButton>
+            <AppBarButton Icon="OpenFile" Label="Open fileset" Click="OpenFileset_Click" />
             <AppBarButton Icon="Setting" Label="Settings" Click="OpenSettings_Click" />
             <AppBarButton Icon="Help" Label="About" Click="OpenAbout_Click" />
         </CommandBar>
 
         <Grid Grid.Row="1">
-            <TextBlock
-                HorizontalAlignment="Center"
-                VerticalAlignment="Center"
-                Text="Use the buttons above to scan or open Settings/About"
-                TextAlignment="Center"
-                FontSize="20"
-                FontWeight="SemiBold" />
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="320" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border
+                Grid.Column="0"
+                Margin="12"
+                Padding="12"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Text="Filesets" FontSize="20" FontWeight="SemiBold" />
+
+                    <ListView
+                        x:Name="FilesetList"
+                        Grid.Row="1"
+                        Margin="0,10,0,10"
+                        SelectionMode="Single"
+                        SelectionChanged="FilesetList_SelectionChanged">
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <StackPanel Spacing="2">
+                                    <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Text="{Binding DirectoryName}" FontSize="12" Opacity="0.75" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+
+                    <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
+                        <Button Content="Open..." Click="OpenFileset_Click" />
+                        <Button Content="Close" Click="CloseFileset_Click" />
+                        <Button Content="Properties" Click="FilesetProperties_Click" />
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <Border
+                Grid.Column="1"
+                Margin="0,12,12,12"
+                Padding="18"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Text="Results" FontSize="24" FontWeight="SemiBold" />
+                    <TextBlock
+                        Grid.Row="1"
+                        x:Name="ActiveFilesetText"
+                        Margin="0,8,0,0"
+                        Text="No fileset selected"
+                        FontWeight="SemiBold"
+                        TextWrapping="WrapWholeWords" />
+                    <StackPanel Grid.Row="2" Orientation="Vertical" Spacing="8" Margin="0,12,0,10">
+                        <StackPanel Orientation="Horizontal" Spacing="16">
+                            <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                <TextBlock Text="Mode" VerticalAlignment="Center" />
+                                <ComboBox x:Name="MatchingModeCombo" Width="150" SelectionChanged="MatchingModeCombo_SelectionChanged">
+                                    <ComboBoxItem Content="Exact" />
+                                    <ComboBoxItem Content="Similar" />
+                                </ComboBox>
+                            </StackPanel>
+                            <CheckBox
+                                x:Name="DuplicatesOnlyCheckBox"
+                                Content="Show only duplicates"
+                                Checked="DuplicatesOnlyCheckBox_Changed"
+                                Unchecked="DuplicatesOnlyCheckBox_Changed" />
+                            <TextBlock x:Name="ResultsCountText" VerticalAlignment="Center" Opacity="0.8" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                            <TextBlock Text="Actions:" VerticalAlignment="Center" Opacity="0.8" />
+                            <Button x:Name="RecycleButton" Content="Recycle" Click="RecycleSelected_Click" IsEnabled="False" />
+                            <Button x:Name="DeleteButton" Content="Delete" Click="DeleteSelected_Click" IsEnabled="False" />
+                            <Button x:Name="CopyButton" Content="Copy to..." Click="CopySelected_Click" IsEnabled="False" />
+                            <Button x:Name="MoveButton" Content="Move to..." Click="MoveSelected_Click" IsEnabled="False" />
+                            <Button x:Name="HardlinkButton" Content="Replace with hard link" Click="HardlinkSelected_Click" IsEnabled="False" />
+                            <Button x:Name="CompareButton" Content="Compare Selected" Click="CompareSelected_Click" IsEnabled="False" />
+                        </StackPanel>
+                    </StackPanel>
+                    <Grid Grid.Row="3">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <Grid ColumnSpacing="10" Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="2*" />
+                                <ColumnDefinition Width="1.2*" />
+                                <ColumnDefinition Width="0.9*" />
+                                <ColumnDefinition Width="0.9*" />
+                                <ColumnDefinition Width="1.4*" />
+                                <ColumnDefinition Width="1.4*" />
+                                <ColumnDefinition Width="1.3*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Name / Path" FontWeight="SemiBold" />
+                            <TextBlock Grid.Column="1" Text="Size" FontWeight="SemiBold" />
+                            <TextBlock Grid.Column="2" Text="Type" FontWeight="SemiBold" />
+                            <TextBlock Grid.Column="3" Text="Id" FontWeight="SemiBold" />
+                            <TextBlock Grid.Column="4" Text="Blake3" FontWeight="SemiBold" />
+                            <TextBlock Grid.Column="5" Text="SHA-256" FontWeight="SemiBold" />
+                            <TextBlock Grid.Column="6" Text="Match" FontWeight="SemiBold" />
+                        </Grid>
+                        <ListView
+                            x:Name="ResultsList"
+                            Grid.Row="1"
+                            IsItemClickEnabled="True"
+                            ItemClick="ResultsList_ItemClick"
+                            SelectionMode="Multiple"
+                            SelectionChanged="ResultsList_SelectionChanged">
+                            <ListView.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid ColumnSpacing="10" Padding="0,3">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="2*" />
+                                            <ColumnDefinition Width="1.2*" />
+                                            <ColumnDefinition Width="0.9*" />
+                                            <ColumnDefinition Width="0.9*" />
+                                            <ColumnDefinition Width="1.4*" />
+                                            <ColumnDefinition Width="1.4*" />
+                                            <ColumnDefinition Width="1.3*" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" Spacing="1">
+                                            <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{Binding DirectoryPath}" FontSize="12" Opacity="0.7" TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Column="1" Text="{Binding SizeDisplay}" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Grid.Column="2" Text="{Binding FileType}" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Grid.Column="3" Text="{Binding IdDisplay}" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Grid.Column="4" Text="{Binding Blake3}" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Grid.Column="5" Text="{Binding Sha256}" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Grid.Column="6" Text="{Binding MatchInfo}" TextTrimming="CharacterEllipsis" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ListView.ItemTemplate>
+                        </ListView>
+                    </Grid>
+                </Grid>
+            </Border>
         </Grid>
 
         <Grid Grid.Row="2" Background="{ThemeResource CardBackgroundFillColorDefaultBrush}">
