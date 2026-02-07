@@ -1,8 +1,10 @@
 using System;
+using System.ComponentModel;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using DupdupNinjaWinUI.Services;
 using Microsoft.VisualBasic.FileIO;
@@ -18,6 +20,8 @@ namespace DupdupNinjaWinUI;
 public sealed partial class MainWindow : Window
 {
     private const int ResultsPageSize = 5000;
+    [DllImport("Kernel32.dll", EntryPoint = "CreateHardLinkW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool CreateHardLink(string fileName, string existingFileName, IntPtr securityAttributes);
 
     private readonly AppSettingsStore _settingsStore;
     private readonly OpenFilesetsStore _openFilesetsStore;
@@ -422,7 +426,11 @@ public sealed partial class MainWindow : Window
             }
 
             File.Delete(row.Path);
-            File.CreateHardLink(row.Path, source.Path);
+            if (!CreateHardLink(row.Path, source.Path, IntPtr.Zero))
+            {
+                var code = Marshal.GetLastPInvokeError();
+                throw new IOException($"Failed to create hard link ({code}): {new Win32Exception(code).Message}");
+            }
             replaced.Add(row.Path);
         }
 

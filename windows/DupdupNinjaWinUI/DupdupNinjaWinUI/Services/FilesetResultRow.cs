@@ -53,7 +53,7 @@ public sealed class FilesetResultRow
             Id = id,
             Path = path,
             DisplayName = displayName,
-            DirectoryPath = Path.GetDirectoryName(path) ?? string.Empty,
+            DirectoryPath = System.IO.Path.GetDirectoryName(path) ?? string.Empty,
             SizeBytes = sizeBytes,
             SizeDisplay = FormatBytes(sizeBytes),
             FileType = string.IsNullOrWhiteSpace(fileType) ? "(unknown)" : fileType,
