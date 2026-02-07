@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::convert::TryInto;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -10,6 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
 use image_hasher::{HashAlg, HasherConfig};
+use rayon::prelude::*;
 use walkdir::WalkDir;
 
 use crate::db::SqliteScanStore;
@@ -32,6 +34,7 @@ pub struct ScanConfig {
     pub capture_snapshots: bool,
     pub snapshots_per_video: u32,
     pub snapshot_max_dim: u32,
+    pub concurrent_processing: bool,
 }
 
 impl ScanConfig {
@@ -44,6 +47,7 @@ impl ScanConfig {
             capture_snapshots: true,
             snapshots_per_video: 3,
             snapshot_max_dim: 1024,
+            concurrent_processing: true,
         }
     }
 }
@@ -74,6 +78,12 @@ impl ScanCancelToken {
 }
 
 #[derive(Debug, Clone)]
+pub struct ActiveScanTask {
+    pub path: PathBuf,
+    pub step: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct ScanProgress {
     pub files_seen: u64,
     pub files_hashed: u64,
@@ -83,6 +93,7 @@ pub struct ScanProgress {
     pub total_bytes: u64,
     pub current_path: PathBuf,
     pub current_step: Option<String>,
+    pub active_tasks: Vec<ActiveScanTask>,
 }
 
 pub fn scan_to_sqlite_with_progress<F>(
@@ -113,6 +124,11 @@ pub fn scan_to_sqlite_with_progress_and_totals<F>(
 where
     F: FnMut(&ScanProgress),
 {
+    const SCAN_BATCH_FILES: usize = 32;
+    const SCAN_PROGRESS_TICK: Duration = Duration::from_millis(500);
+    const FLUSH_EVERY_FILES: u64 = 2_000;
+    const FLUSH_EVERY_ELAPSED: Duration = Duration::from_secs(5);
+
     if !config.root.exists() {
         return Err(Error::InvalidArgument(format!(
             "root does not exist: {}",
@@ -144,201 +160,449 @@ where
         description: String::new(),
         notes: String::new(),
     };
-    store.set_fileset_metadata(&fileset_meta)?;
+    store.begin_scan_write_optimized_tx()?;
 
-    let mut stats = ScanStats::default();
-    let mut bytes_seen = 0u64;
-    let totals = totals.unwrap_or_default();
-    for entry in WalkDir::new(&config.root).follow_links(false).into_iter() {
-        if let Some(cancel) = cancel {
-            if cancel.is_cancelled() {
-                update_fileset_status(store, config, "incomplete");
-                return Err(Error::Cancelled);
+    let scan_result = (|| -> Result<ScanResult> {
+        store.set_fileset_metadata(&fileset_meta)?;
+
+        let mut stats = ScanStats::default();
+        let mut bytes_seen = 0u64;
+        let mut files_since_flush = 0u64;
+        let mut last_flush = Instant::now();
+        let totals = totals.unwrap_or_default();
+        let mut batch = Vec::with_capacity(SCAN_BATCH_FILES);
+        let mut last_batch_flush = Instant::now();
+        for entry in WalkDir::new(&config.root).follow_links(false).into_iter() {
+            if let Some(cancel) = cancel {
+                if cancel.is_cancelled() {
+                    update_fileset_status(store, config, "incomplete");
+                    store.commit_tx()?;
+                    return Err(Error::Cancelled);
+                }
             }
-        }
 
-        let entry = match entry {
-            Ok(v) => v,
-            Err(_) => {
-                stats.files_skipped += 1;
+            let entry = match entry {
+                Ok(v) => v,
+                Err(_) => {
+                    stats.files_skipped += 1;
+                    continue;
+                }
+            };
+
+            if !entry.file_type().is_file() {
                 continue;
             }
-        };
 
-        if !entry.file_type().is_file() {
-            continue;
-        }
-
-        stats.files_seen += 1;
-        let path = entry.path().to_path_buf();
-        let mut emit_progress = |step: Option<&str>,
-                                 files_seen: u64,
-                                 files_hashed: u64,
-                                 files_skipped: u64,
-                                 bytes_seen: u64| {
-            on_progress(&ScanProgress {
-                files_seen,
-                files_hashed,
-                files_skipped,
-                bytes_seen,
-                total_files: totals.files,
-                total_bytes: totals.bytes,
-                current_path: path.clone(),
-                current_step: step.map(|s| s.to_string()),
+            stats.files_seen += 1;
+            batch.push(ScanCandidate {
+                path: entry.path().to_path_buf(),
+                is_symlink: entry.file_type().is_symlink(),
             });
-        };
-        let md = match entry.metadata() {
-            Ok(v) => v,
-            Err(_) => {
-                stats.files_skipped += 1;
-                continue;
-            }
-        };
 
-        bytes_seen = bytes_seen.saturating_add(md.len());
-        let linked_file = is_linked_file(&entry, &md);
-        let mut rec = MediaFileRecord {
-            file_id: None,
-            path: relative_to_root(&config.root, &path).unwrap_or(path.clone()),
-            size_bytes: md.len(),
-            modified_at: md.modified().ok(),
-            blake3: None,
-            sha256: None,
-            ahash: None,
-            dhash: None,
-            phash: None,
-            ffmpeg_metadata: None,
-            file_type: None,
-        };
-
-        emit_progress(
-            Some("metadata"),
-            stats.files_seen,
-            stats.files_hashed,
-            stats.files_skipped,
-            bytes_seen,
-        );
-        rec.file_type = match infer::get_from_path(&path) {
-            Ok(Some(kind)) => Some(kind.mime_type().to_string()),
-            Ok(None) => None,
-            Err(_) => None,
-        };
-
-        rec.ffmpeg_metadata = ffprobe_metadata(&path);
-
-        if config.perceptual_hashes
-            && !linked_file
-            && is_image_file(&path, rec.file_type.as_deref())
-        {
-            emit_progress(
-                Some("hash: perceptual"),
-                stats.files_seen,
-                stats.files_hashed,
-                stats.files_skipped,
-                bytes_seen,
-            );
-            if let Some((ahash, dhash, phash)) = image_hashes_from_path(&path) {
-                rec.ahash = Some(ahash);
-                rec.dhash = Some(dhash);
-                rec.phash = Some(phash);
+            if batch.len() >= SCAN_BATCH_FILES
+                || (!batch.is_empty() && last_batch_flush.elapsed() >= SCAN_PROGRESS_TICK)
+            {
+                flush_scan_batch(
+                    config,
+                    store,
+                    cancel,
+                    &totals,
+                    &mut on_progress,
+                    &mut stats,
+                    &mut bytes_seen,
+                    &mut files_since_flush,
+                    &mut last_flush,
+                    &mut batch,
+                    FLUSH_EVERY_FILES,
+                    FLUSH_EVERY_ELAPSED,
+                )?;
+                last_batch_flush = Instant::now();
             }
         }
+        if !batch.is_empty() {
+            flush_scan_batch(
+                config,
+                store,
+                cancel,
+                &totals,
+                &mut on_progress,
+                &mut stats,
+                &mut bytes_seen,
+                &mut files_since_flush,
+                &mut last_flush,
+                &mut batch,
+                FLUSH_EVERY_FILES,
+                FLUSH_EVERY_ELAPSED,
+            )?;
+        }
 
-        if config.hash_files && !linked_file {
-            emit_progress(
-                Some("hash: blake3"),
-                stats.files_seen,
-                stats.files_hashed,
-                stats.files_skipped,
-                bytes_seen,
-            );
-            match blake3_file(&path) {
-                Ok(hash) => {
-                    rec.blake3 = Some(hash);
-                }
-                Err(_) => {
-                    stats.files_skipped += 1;
+        update_fileset_status(store, config, "completed");
+        Ok(ScanResult { stats })
+    })();
+
+    match scan_result {
+        Ok(result) => {
+            store.commit_tx()?;
+            Ok(result)
+        }
+        Err(err) => {
+            let _ = store.rollback_tx();
+            Err(err)
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ScanCandidate {
+    path: PathBuf,
+    is_symlink: bool,
+}
+
+struct ProcessedScanItem {
+    path: PathBuf,
+    rec: Option<MediaFileRecord>,
+    snapshots: Option<Vec<FileSnapshotRecord>>,
+    bytes_seen: u64,
+    files_hashed_inc: u64,
+    files_skipped_inc: u64,
+}
+
+enum WorkerUpdate {
+    Stage { path: PathBuf, step: &'static str },
+    Done(ProcessedScanItem),
+}
+
+#[allow(clippy::too_many_arguments)]
+fn flush_scan_batch<F>(
+    config: &ScanConfig,
+    store: &SqliteScanStore,
+    cancel: Option<&ScanCancelToken>,
+    totals: &ScanTotals,
+    on_progress: &mut F,
+    stats: &mut ScanStats,
+    bytes_seen: &mut u64,
+    files_since_flush: &mut u64,
+    last_flush: &mut Instant,
+    batch: &mut Vec<ScanCandidate>,
+    flush_every_files: u64,
+    flush_every_elapsed: Duration,
+) -> Result<()>
+where
+    F: FnMut(&ScanProgress),
+{
+    let candidates = std::mem::take(batch);
+    if candidates.is_empty() {
+        return Ok(());
+    }
+
+    if effective_concurrency_enabled(config) {
+        let mut active_tasks: BTreeMap<PathBuf, String> = BTreeMap::new();
+        let mut completed = 0usize;
+        let target = candidates.len();
+        let (tx, rx) = mpsc::channel::<WorkerUpdate>();
+        let mut cancelled = false;
+
+        let cfg = config.clone();
+        let handle = thread::spawn(move || {
+            candidates.into_par_iter().for_each(|candidate| {
+                let tx_item = tx.clone();
+                let item = process_scan_candidate(&cfg, candidate, |path, step| {
+                    let _ = tx_item.send(WorkerUpdate::Stage {
+                        path: path.to_path_buf(),
+                        step,
+                    });
+                });
+                let _ = tx_item.send(WorkerUpdate::Done(item));
+            });
+        });
+
+        while completed < target {
+            if let Some(cancel) = cancel {
+                if cancel.is_cancelled() {
+                    cancelled = true;
                 }
             }
-            emit_progress(
-                Some("hash: sha256"),
-                stats.files_seen,
-                stats.files_hashed,
-                stats.files_skipped,
-                bytes_seen,
-            );
-            match sha256_file(&path) {
-                Ok(hash) => {
-                    rec.sha256 = Some(hash);
-                    stats.files_hashed += 1;
+
+            let msg = match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(v) => v,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            };
+
+            match msg {
+                WorkerUpdate::Stage { path, step } => {
+                    active_tasks.insert(path.clone(), step.to_string());
+                    on_progress(&ScanProgress {
+                        files_seen: stats.files_seen,
+                        files_hashed: stats.files_hashed,
+                        files_skipped: stats.files_skipped,
+                        bytes_seen: *bytes_seen,
+                        total_files: totals.files,
+                        total_bytes: totals.bytes,
+                        current_path: path,
+                        current_step: Some(step.to_string()),
+                        active_tasks: active_task_list(&active_tasks),
+                    });
                 }
-                Err(_) => {
-                    stats.files_skipped += 1;
+                WorkerUpdate::Done(item) => {
+                    completed = completed.saturating_add(1);
+                    active_tasks.remove(&item.path);
+
+                    if cancelled {
+                        continue;
+                    }
+
+                    *bytes_seen = bytes_seen.saturating_add(item.bytes_seen);
+                    stats.files_hashed = stats.files_hashed.saturating_add(item.files_hashed_inc);
+                    stats.files_skipped =
+                        stats.files_skipped.saturating_add(item.files_skipped_inc);
+
+                    if let Some(mut rec) = item.rec {
+                        let file_id = store.upsert_file(&rec)?;
+                        rec.file_id = Some(file_id);
+                        if let Some(snaps) = item.snapshots {
+                            let _ = store.replace_file_snapshots(file_id, &snaps);
+                        }
+                    }
+
+                    on_progress(&ScanProgress {
+                        files_seen: stats.files_seen,
+                        files_hashed: stats.files_hashed,
+                        files_skipped: stats.files_skipped,
+                        bytes_seen: *bytes_seen,
+                        total_files: totals.files,
+                        total_bytes: totals.bytes,
+                        current_path: item.path.clone(),
+                        current_step: Some("done".to_string()),
+                        active_tasks: active_task_list(&active_tasks),
+                    });
+
+                    *files_since_flush = files_since_flush.saturating_add(1);
+                    if *files_since_flush >= flush_every_files
+                        || last_flush.elapsed() >= flush_every_elapsed
+                    {
+                        store.commit_tx()?;
+                        store.begin_scan_write_optimized_tx()?;
+                        *files_since_flush = 0;
+                        *last_flush = Instant::now();
+                    }
                 }
             }
         }
+        let _ = handle.join();
 
-        let file_id = store.upsert_file(&rec)?;
-        rec.file_id = Some(file_id);
+        if cancelled {
+            update_fileset_status(store, config, "incomplete");
+            store.commit_tx()?;
+            return Err(Error::Cancelled);
+        }
+    } else {
+        for candidate in candidates {
+            let item = process_scan_candidate(config, candidate, |path, step| {
+                on_progress(&ScanProgress {
+                    files_seen: stats.files_seen,
+                    files_hashed: stats.files_hashed,
+                    files_skipped: stats.files_skipped,
+                    bytes_seen: *bytes_seen,
+                    total_files: totals.files,
+                    total_bytes: totals.bytes,
+                    current_path: path.to_path_buf(),
+                    current_step: Some(step.to_string()),
+                    active_tasks: vec![ActiveScanTask {
+                        path: path.to_path_buf(),
+                        step: step.to_string(),
+                    }],
+                });
+            });
 
-        if config.capture_snapshots && config.snapshots_per_video > 0 {
-            let is_video = is_video_file(&path, rec.file_type.as_deref());
-            let duration_ms = rec.ffmpeg_metadata.as_deref().and_then(ffprobe_duration_ms);
+            if let Some(cancel) = cancel {
+                if cancel.is_cancelled() {
+                    update_fileset_status(store, config, "incomplete");
+                    store.commit_tx()?;
+                    return Err(Error::Cancelled);
+                }
+            }
 
-            if is_video && duration_ms.is_some() {
-                emit_progress(
-                    Some("snapshotting"),
-                    stats.files_seen,
-                    stats.files_hashed,
-                    stats.files_skipped,
-                    bytes_seen,
-                );
-                let snapshots = video_snapshots_for_file(
-                    &path,
-                    duration_ms,
-                    config.snapshots_per_video,
-                    config.snapshot_max_dim,
-                    Duration::from_secs(30),
-                );
-                if let Some(snaps) = snapshots {
+            *bytes_seen = bytes_seen.saturating_add(item.bytes_seen);
+            stats.files_hashed = stats.files_hashed.saturating_add(item.files_hashed_inc);
+            stats.files_skipped = stats.files_skipped.saturating_add(item.files_skipped_inc);
+
+            if let Some(mut rec) = item.rec {
+                let file_id = store.upsert_file(&rec)?;
+                rec.file_id = Some(file_id);
+                if let Some(snaps) = item.snapshots {
                     let _ = store.replace_file_snapshots(file_id, &snaps);
                 }
             }
+
+            on_progress(&ScanProgress {
+                files_seen: stats.files_seen,
+                files_hashed: stats.files_hashed,
+                files_skipped: stats.files_skipped,
+                bytes_seen: *bytes_seen,
+                total_files: totals.files,
+                total_bytes: totals.bytes,
+                current_path: item.path.clone(),
+                current_step: Some("done".to_string()),
+                active_tasks: Vec::new(),
+            });
+
+            *files_since_flush = files_since_flush.saturating_add(1);
+            if *files_since_flush >= flush_every_files
+                || last_flush.elapsed() >= flush_every_elapsed
+            {
+                store.commit_tx()?;
+                store.begin_scan_write_optimized_tx()?;
+                *files_since_flush = 0;
+                *last_flush = Instant::now();
+            }
         }
-        emit_progress(
-            Some("done"),
-            stats.files_seen,
-            stats.files_hashed,
-            stats.files_skipped,
-            bytes_seen,
-        );
     }
 
-    update_fileset_status(store, config, "completed");
-    Ok(ScanResult { stats })
+    Ok(())
 }
 
-fn is_linked_file(entry: &walkdir::DirEntry, md: &std::fs::Metadata) -> bool {
-    if entry.file_type().is_symlink() {
-        return true;
+fn active_task_list(active: &BTreeMap<PathBuf, String>) -> Vec<ActiveScanTask> {
+    const MAX_ACTIVE_TASKS: usize = 8;
+    active
+        .iter()
+        .take(MAX_ACTIVE_TASKS)
+        .map(|(path, step)| ActiveScanTask {
+            path: path.clone(),
+            step: step.clone(),
+        })
+        .collect()
+}
+
+fn process_scan_candidate<F>(
+    config: &ScanConfig,
+    candidate: ScanCandidate,
+    mut on_stage: F,
+) -> ProcessedScanItem
+where
+    F: FnMut(&Path, &'static str),
+{
+    let path = candidate.path;
+    on_stage(&path, "metadata");
+    let md = match std::fs::metadata(&path) {
+        Ok(v) => v,
+        Err(_) => {
+            return ProcessedScanItem {
+                path,
+                rec: None,
+                snapshots: None,
+                bytes_seen: 0,
+                files_hashed_inc: 0,
+                files_skipped_inc: 1,
+            };
+        }
+    };
+
+    let linked_file = candidate.is_symlink || is_hardlinked_file(&md);
+    on_stage(&path, "file type");
+    let mut rec = MediaFileRecord {
+        file_id: None,
+        path: relative_to_root(&config.root, &path).unwrap_or(path.clone()),
+        size_bytes: md.len(),
+        modified_at: md.modified().ok(),
+        blake3: None,
+        sha256: None,
+        ahash: None,
+        dhash: None,
+        phash: None,
+        ffmpeg_metadata: None,
+        file_type: None,
+    };
+
+    rec.file_type = match infer::get_from_path(&path) {
+        Ok(Some(kind)) => Some(kind.mime_type().to_string()),
+        Ok(None) => None,
+        Err(_) => None,
+    };
+    on_stage(&path, "ffprobe metadata");
+    rec.ffmpeg_metadata = ffprobe_metadata(&path);
+
+    if config.perceptual_hashes && !linked_file && is_image_file(&path, rec.file_type.as_deref()) {
+        on_stage(&path, "ahash/dhash/phash");
+        if let Some((ahash, dhash, phash)) = image_hashes_from_path(&path) {
+            rec.ahash = Some(ahash);
+            rec.dhash = Some(dhash);
+            rec.phash = Some(phash);
+        }
     }
 
+    let mut files_hashed_inc = 0_u64;
+    let mut files_skipped_inc = 0_u64;
+    if config.hash_files && !linked_file {
+        on_stage(&path, "blake3");
+        match blake3_file(&path) {
+            Ok(hash) => {
+                rec.blake3 = Some(hash);
+            }
+            Err(_) => {
+                files_skipped_inc = files_skipped_inc.saturating_add(1);
+            }
+        }
+        on_stage(&path, "sha256");
+        match sha256_file(&path) {
+            Ok(hash) => {
+                rec.sha256 = Some(hash);
+                files_hashed_inc = files_hashed_inc.saturating_add(1);
+            }
+            Err(_) => {
+                files_skipped_inc = files_skipped_inc.saturating_add(1);
+            }
+        }
+    }
+
+    let mut snapshots = None;
+    if config.capture_snapshots && config.snapshots_per_video > 0 {
+        let is_video = is_video_file(&path, rec.file_type.as_deref());
+        let duration_ms = rec.ffmpeg_metadata.as_deref().and_then(ffprobe_duration_ms);
+        if is_video && duration_ms.is_some() {
+            on_stage(&path, "video snapshots");
+            snapshots = video_snapshots_for_file(
+                &path,
+                duration_ms,
+                config.snapshots_per_video,
+                config.snapshot_max_dim,
+                Duration::from_secs(30),
+            );
+        }
+    }
+
+    ProcessedScanItem {
+        path,
+        rec: Some(rec),
+        snapshots,
+        bytes_seen: md.len(),
+        files_hashed_inc,
+        files_skipped_inc,
+    }
+}
+
+fn is_hardlinked_file(md: &std::fs::Metadata) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        if md.nlink() > 1 {
-            return true;
-        }
+        return md.nlink() > 1;
     }
-
     #[cfg(windows)]
     {
         let _ = md;
-        // Some Windows metadata link-count APIs are unstable on older toolchains.
-        // Keep stable behavior by treating only symlinks as linked files on Windows.
+        false
     }
+}
 
-    false
+fn effective_concurrency_enabled(config: &ScanConfig) -> bool {
+    if !config.concurrent_processing {
+        return false;
+    }
+    // Set DUPDUPNINJA_SCAN_SINGLE_THREADED=1 to force single-thread mode.
+    match std::env::var("DUPDUPNINJA_SCAN_SINGLE_THREADED") {
+        Ok(v) => v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("yes"),
+        Err(_) => true,
+    }
 }
 
 fn ffprobe_metadata(path: &Path) -> Option<String> {

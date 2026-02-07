@@ -143,17 +143,19 @@ pub fn run() {
         ui_state,
         move |_, _| {
             if let Some(window) = app.active_window() {
-                let (initial_capture, initial_count, initial_max_dim) = ui_state
-                    .borrow()
-                    .as_ref()
-                    .map(|s| {
-                        (
-                            s.capture_snapshots,
-                            s.snapshots_per_video,
-                            s.snapshot_max_dim,
-                        )
-                    })
-                    .unwrap_or((true, 3, 1024));
+                let (initial_capture, initial_count, initial_max_dim, initial_concurrent) =
+                    ui_state
+                        .borrow()
+                        .as_ref()
+                        .map(|s| {
+                            (
+                                s.capture_snapshots,
+                                s.snapshots_per_video,
+                                s.snapshot_max_dim,
+                                s.concurrent_processing,
+                            )
+                        })
+                        .unwrap_or((true, 3, 1024, true));
 
                 let settings_window = gtk::Window::builder()
                     .transient_for(&window)
@@ -231,6 +233,16 @@ pub fn run() {
                 row3.append(&size_dropdown);
                 content.append(&row3);
 
+                let row4 = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+                row4.set_hexpand(true);
+                let label4 = gtk::Label::new(Some("Concurrent scan processing"));
+                label4.set_xalign(0.0);
+                label4.set_hexpand(true);
+                let concurrent_switch = gtk::Switch::builder().active(initial_concurrent).build();
+                row4.append(&label4);
+                row4.append(&concurrent_switch);
+                content.append(&row4);
+
                 capture_switch.connect_notify_local(
                     Some("active"),
                     glib::clone!(
@@ -247,6 +259,7 @@ pub fn run() {
                             }
                             snapshots_spin.set_sensitive(active);
                             size_dropdown.set_sensitive(active);
+                            persist_scan_settings_from_ui_state(ui_state.clone());
                         }
                     ),
                 );
@@ -259,6 +272,7 @@ pub fn run() {
                         if let Some(state) = ui_state.borrow_mut().as_mut() {
                             state.snapshots_per_video = value;
                         }
+                        persist_scan_settings_from_ui_state(ui_state.clone());
                     }
                 ));
 
@@ -271,8 +285,24 @@ pub fn run() {
                         if let Some(state) = ui_state.borrow_mut().as_mut() {
                             state.snapshot_max_dim = sizes[idx];
                         }
+                        persist_scan_settings_from_ui_state(ui_state.clone());
                     }
                 ));
+
+                concurrent_switch.connect_notify_local(
+                    Some("active"),
+                    glib::clone!(
+                        #[strong]
+                        ui_state,
+                        move |sw, _| {
+                            let active = sw.is_active();
+                            if let Some(state) = ui_state.borrow_mut().as_mut() {
+                                state.concurrent_processing = active;
+                            }
+                            persist_scan_settings_from_ui_state(ui_state.clone());
+                        }
+                    ),
+                );
 
                 let fileset_title = gtk::Label::new(Some("Filesets"));
                 fileset_title.add_css_class("title-3");
@@ -576,6 +606,7 @@ pub fn run() {
         toolbar.add_bottom_bar(&status_bar);
         window.set_content(Some(&toolbar));
 
+        let startup_settings = load_settings();
         let (update_tx, update_rx) = std::sync::mpsc::channel::<UiUpdate>();
         *ui_state_for_activate.borrow_mut() = Some(UiState {
             status_label: status_label.clone(),
@@ -596,9 +627,10 @@ pub fn run() {
             files_db_path: files_db_path.clone(),
             active_scan_fileset_id: None,
             scan_actions_enabled: true,
-            capture_snapshots: true,
-            snapshots_per_video: 3,
-            snapshot_max_dim: 1024,
+            capture_snapshots: startup_settings.capture_snapshots,
+            snapshots_per_video: startup_settings.snapshots_per_video,
+            snapshot_max_dim: startup_settings.snapshot_max_dim,
+            concurrent_processing: startup_settings.concurrent_processing,
             last_files_refresh: None,
             selected_files: std::collections::HashMap::new(),
             action_bar_label: action_bar.label.clone(),
@@ -778,6 +810,7 @@ fn start_scan(
         capture_snapshots,
         snapshots_per_video,
         snapshot_max_dim,
+        concurrent_processing,
     ) = {
         let state = ui_state.borrow();
         let Some(state) = state.as_ref() else {
@@ -791,6 +824,7 @@ fn start_scan(
             state.capture_snapshots,
             state.snapshots_per_video,
             state.snapshot_max_dim,
+            state.concurrent_processing,
         )
     };
 
@@ -829,6 +863,7 @@ fn start_scan(
             capture_snapshots,
             snapshots_per_video,
             snapshot_max_dim,
+            concurrent_processing,
         };
 
         let prescan_result =
@@ -947,9 +982,26 @@ fn default_fileset_dir_base() -> std::path::PathBuf {
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 struct GtkSettings {
     fileset_dir: Option<std::path::PathBuf>,
+    capture_snapshots: bool,
+    snapshots_per_video: u32,
+    snapshot_max_dim: u32,
+    concurrent_processing: bool,
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+impl Default for GtkSettings {
+    fn default() -> Self {
+        Self {
+            fileset_dir: None,
+            capture_snapshots: true,
+            snapshots_per_video: 3,
+            snapshot_max_dim: 1024,
+            concurrent_processing: true,
+        }
+    }
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]
@@ -982,11 +1034,31 @@ fn load_settings() -> GtkSettings {
         let Some((key, value)) = line.split_once('=') else {
             continue;
         };
-        if key.trim() == "fileset_dir" {
-            let value = value.trim();
-            if !value.is_empty() {
-                settings.fileset_dir = Some(std::path::PathBuf::from(value));
+        let key = key.trim();
+        let value = value.trim();
+        match key {
+            "fileset_dir" => {
+                if !value.is_empty() {
+                    settings.fileset_dir = Some(std::path::PathBuf::from(value));
+                }
             }
+            "capture_snapshots" => {
+                settings.capture_snapshots = value == "1" || value.eq_ignore_ascii_case("true");
+            }
+            "snapshots_per_video" => {
+                if let Ok(v) = value.parse::<u32>() {
+                    settings.snapshots_per_video = v.clamp(1, 10);
+                }
+            }
+            "snapshot_max_dim" => {
+                if let Ok(v) = value.parse::<u32>() {
+                    settings.snapshot_max_dim = v.clamp(128, 2048);
+                }
+            }
+            "concurrent_processing" => {
+                settings.concurrent_processing = value == "1" || value.eq_ignore_ascii_case("true");
+            }
+            _ => {}
         }
     }
     settings
@@ -1000,12 +1072,51 @@ fn save_settings(settings: &GtkSettings) -> std::io::Result<()> {
     }
     let mut contents = String::new();
     contents.push_str("# dupdupninja settings\n");
+    contents.push_str("capture_snapshots=");
+    contents.push_str(if settings.capture_snapshots { "1" } else { "0" });
+    contents.push('\n');
+    contents.push_str("snapshots_per_video=");
+    contents.push_str(&settings.snapshots_per_video.clamp(1, 10).to_string());
+    contents.push('\n');
+    contents.push_str("snapshot_max_dim=");
+    contents.push_str(&settings.snapshot_max_dim.clamp(128, 2048).to_string());
+    contents.push('\n');
+    contents.push_str("concurrent_processing=");
+    contents.push_str(if settings.concurrent_processing {
+        "1"
+    } else {
+        "0"
+    });
+    contents.push('\n');
     if let Some(dir) = &settings.fileset_dir {
         contents.push_str("fileset_dir=");
         contents.push_str(&dir.display().to_string());
         contents.push('\n');
     }
     std::fs::write(path, contents)
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn persist_scan_settings_from_ui_state(ui_state: std::rc::Rc<std::cell::RefCell<Option<UiState>>>) {
+    let (capture_snapshots, snapshots_per_video, snapshot_max_dim, concurrent_processing) = {
+        let state = ui_state.borrow();
+        let Some(state) = state.as_ref() else {
+            return;
+        };
+        (
+            state.capture_snapshots,
+            state.snapshots_per_video,
+            state.snapshot_max_dim,
+            state.concurrent_processing,
+        )
+    };
+
+    let mut settings = load_settings();
+    settings.capture_snapshots = capture_snapshots;
+    settings.snapshots_per_video = snapshots_per_video.clamp(1, 10);
+    settings.snapshot_max_dim = snapshot_max_dim.clamp(128, 2048);
+    settings.concurrent_processing = concurrent_processing;
+    let _ = save_settings(&settings);
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]

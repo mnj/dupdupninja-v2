@@ -14,6 +14,7 @@ public sealed class AppSettings
     public int SimilarPhashMaxDistance { get; set; } = 8;
     public int SimilarDhashMaxDistance { get; set; } = 12;
     public int SimilarAhashMaxDistance { get; set; } = 12;
+    public bool ConcurrentScanProcessing { get; set; } = true;
 
     public string? DefaultFilesetFolder { get; set; }
 
@@ -29,6 +30,7 @@ public sealed class AppSettings
             SimilarPhashMaxDistance = SimilarPhashMaxDistance,
             SimilarDhashMaxDistance = SimilarDhashMaxDistance,
             SimilarAhashMaxDistance = SimilarAhashMaxDistance,
+            ConcurrentScanProcessing = ConcurrentScanProcessing,
             DefaultFilesetFolder = DefaultFilesetFolder,
         };
     }

@@ -62,6 +62,7 @@ typedef struct DupdupScanOptions {
   uint8_t capture_snapshots;
   uint32_t snapshots_per_video;
   uint32_t snapshot_max_dim;
+  uint8_t concurrent_processing;
 } DupdupScanOptions;
 
 typedef struct DupdupFilesetRow {

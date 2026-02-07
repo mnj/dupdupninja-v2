@@ -139,6 +139,7 @@ struct ProgressDto {
     total_bytes: u64,
     current_path: String,
     current_step: Option<String>,
+    active_tasks: Vec<String>,
 }
 
 impl From<&ScanProgress> for ProgressDto {
@@ -152,6 +153,11 @@ impl From<&ScanProgress> for ProgressDto {
             total_bytes: progress.total_bytes,
             current_path: progress.current_path.display().to_string(),
             current_step: progress.current_step.clone(),
+            active_tasks: progress
+                .active_tasks
+                .iter()
+                .map(|task| format!("{}: {}", task.step, task.path.display()))
+                .collect(),
         }
     }
 }
@@ -400,6 +406,7 @@ async fn start_scan(state: Arc<AppState>, form: ScanForm) -> Result<()> {
         capture_snapshots: form.capture_snapshots.is_some(),
         snapshots_per_video: form.snapshots_per_video.unwrap_or(3).clamp(1, 10),
         snapshot_max_dim: form.snapshot_max_dim.unwrap_or(1024).clamp(128, 4096),
+        concurrent_processing: true,
     };
 
     let (id, cancel) = {

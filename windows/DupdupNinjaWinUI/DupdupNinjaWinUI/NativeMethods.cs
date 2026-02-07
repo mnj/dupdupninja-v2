@@ -121,6 +121,9 @@ internal static class NativeMethods
         public uint SnapshotsPerVideo;
 
         public uint SnapshotMaxDim;
+
+        [MarshalAs(UnmanagedType.I1)]
+        public bool ConcurrentProcessing;
     }
 
     [StructLayout(LayoutKind.Sequential)]

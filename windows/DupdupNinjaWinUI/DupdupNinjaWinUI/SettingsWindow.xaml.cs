@@ -36,6 +36,7 @@ public sealed partial class SettingsWindow : Window
     private void LoadForm()
     {
         CaptureSnapshotsToggle.IsOn = _working.CaptureSnapshots;
+        ConcurrentScanToggle.IsOn = _working.ConcurrentScanProcessing;
         SnapshotsPerVideoBox.Value = _working.SnapshotsPerVideo;
         SelectSnapshotSize(_working.SnapshotMaxDim);
         SimilarPhashDistanceBox.Value = _working.SimilarPhashMaxDistance;
@@ -96,6 +97,7 @@ public sealed partial class SettingsWindow : Window
     private async void Save_Click(object sender, RoutedEventArgs e)
     {
         _working.CaptureSnapshots = CaptureSnapshotsToggle.IsOn;
+        _working.ConcurrentScanProcessing = ConcurrentScanToggle.IsOn;
         _working.SnapshotsPerVideo = Math.Clamp((int)Math.Round(SnapshotsPerVideoBox.Value), 1, 10);
 
         var selectedItem = SnapshotMaxDimCombo.SelectedItem as ComboBoxItem;

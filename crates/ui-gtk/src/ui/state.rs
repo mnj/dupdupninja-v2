@@ -56,6 +56,7 @@ pub(crate) struct UiState {
     pub(crate) capture_snapshots: bool,
     pub(crate) snapshots_per_video: u32,
     pub(crate) snapshot_max_dim: u32,
+    pub(crate) concurrent_processing: bool,
     pub(crate) last_files_refresh: Option<Instant>,
     pub(crate) selected_files: HashMap<i64, SelectedFile>,
     pub(crate) action_bar_label: gtk::Label,

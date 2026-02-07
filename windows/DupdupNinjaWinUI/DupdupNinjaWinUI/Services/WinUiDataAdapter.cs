@@ -140,6 +140,7 @@ public sealed class NativeWinUiDataAdapter : IWinUiDataAdapter
                     CaptureSnapshots = settings.CaptureSnapshots,
                     SnapshotsPerVideo = (uint)settings.SnapshotsPerVideo,
                     SnapshotMaxDim = (uint)settings.SnapshotMaxDim,
+                    ConcurrentProcessing = settings.ConcurrentScanProcessing,
                 };
 
                 var scanStatus = NativeMethods.dupdupninja_scan_folder_to_sqlite_with_progress_totals_and_options(

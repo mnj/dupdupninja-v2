@@ -27,6 +27,12 @@
                     Header="Capture video snapshots"
                     Toggled="CaptureSnapshotsToggle_Toggled" />
 
+                <ToggleSwitch
+                    x:Name="ConcurrentScanToggle"
+                    Header="Use concurrent scan processing"
+                    OnContent="On"
+                    OffContent="Off" />
+
                 <StackPanel Spacing="8">
                     <TextBlock Text="Snapshots per video" />
                     <NumberBox

@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::io::IsTerminal;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, TryRecvError};
+use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crossterm::event::{self, Event as CEvent, KeyCode, KeyEventKind};
@@ -12,8 +14,8 @@ use crossterm::{execute, ExecutableCommand};
 use dupdupninja_core::db::SqliteScanStore;
 use dupdupninja_core::models::ScanRootKind;
 use dupdupninja_core::scan::{
-    prescan, scan_to_sqlite_with_progress_and_totals, PrescanProgress, ScanConfig, ScanProgress,
-    ScanTotals,
+    prescan, scan_to_sqlite_with_progress_and_totals, PrescanProgress, ScanCancelToken, ScanConfig,
+    ScanProgress, ScanTotals,
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout};
@@ -80,7 +82,7 @@ fn print_help() {
         r#"dupdupninja
 
 USAGE:
-  dupdupninja scan --root <path> [--db <fileset.ddn>] [--drive|--folder]
+  dupdupninja scan --root <path> [--db <fileset.ddn>] [--drive|--folder] [--single-threaded|--concurrent]
   dupdupninja matches --db <sqlite_path> [--mode <all|similar|exact>] [--tui|--plain] [--max-files <n>] [--ahash <n>] [--dhash <n>] [--phash <n>]
   dupdupninja web [--port <port>]
 
@@ -88,6 +90,7 @@ NOTES:
   - Filesets are stored as standalone SQLite DBs (one per scan).
   - `scan` writes live progress in-place in the terminal (no scrolling log spam).
   - Snapshot capture is currently disabled in CLI scan mode.
+  - Scan processing is concurrent by default.
   - UI crates are present but stubbed; the CLI is the initial entrypoint.
   - Web UI listens on http://127.0.0.1:4455 by default.
 "#
@@ -98,6 +101,7 @@ fn run_scan_command(args: &mut impl Iterator<Item = String>) -> dupdupninja_core
     let mut root: Option<PathBuf> = None;
     let mut db: Option<PathBuf> = None;
     let mut root_kind = ScanRootKind::Folder;
+    let mut concurrent_processing = true;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -119,6 +123,8 @@ fn run_scan_command(args: &mut impl Iterator<Item = String>) -> dupdupninja_core
             }
             "--drive" => root_kind = ScanRootKind::Drive,
             "--folder" => root_kind = ScanRootKind::Folder,
+            "--single-threaded" => concurrent_processing = false,
+            "--concurrent" => concurrent_processing = true,
             _ => {
                 return Err(dupdupninja_core::Error::InvalidArgument(format!(
                     "unknown arg: {arg}"
@@ -140,6 +146,7 @@ fn run_scan_command(args: &mut impl Iterator<Item = String>) -> dupdupninja_core
         capture_snapshots: false,
         snapshots_per_video: 0,
         snapshot_max_dim: 0,
+        concurrent_processing,
     };
 
     let mut tui = match ScanTui::start() {
@@ -156,6 +163,8 @@ fn run_scan_command(args: &mut impl Iterator<Item = String>) -> dupdupninja_core
     };
     let visual_mode = detect_visual_mode();
     let mut ui_state = ScanUiState::new(root.clone(), db.clone(), root_kind, visual_mode);
+    let cancel_token = ScanCancelToken::new();
+    let mut cancel_watcher = CancelInputWatcher::start(cancel_token.clone(), tui.is_some());
     if let Some(ui) = tui.as_mut() {
         let _ = ui.render(&ui_state);
     } else {
@@ -165,7 +174,10 @@ fn run_scan_command(args: &mut impl Iterator<Item = String>) -> dupdupninja_core
         println!("snapshots: disabled");
     }
 
-    let totals = prescan(&cfg, None, |update: &PrescanProgress| {
+    let prescan_result = prescan(&cfg, Some(&cancel_token), |update: &PrescanProgress| {
+        if cancel_token.is_cancelled() {
+            ui_state.on_cancel_requested();
+        }
         if let Some(ui) = tui.as_mut() {
             ui_state.on_prescan_progress(update);
             if ui_state.should_render(false) {
@@ -175,27 +187,50 @@ fn run_scan_command(args: &mut impl Iterator<Item = String>) -> dupdupninja_core
         if let Some(progress) = plain_progress.as_mut() {
             progress.draw_prescan(update);
         }
-    })?;
-    if let Some(progress) = plain_progress.as_mut() {
-        progress.finish_line();
-    }
-    if let Some(ui) = tui.as_mut() {
-        ui_state.on_prescan_done(totals);
-        let _ = ui.render(&ui_state);
-    } else {
-        println!(
-            "prescan complete: {} files, {}",
-            totals.files,
-            human_bytes(totals.bytes)
-        );
-    }
+    });
+    let totals = match prescan_result {
+        Ok(totals) => {
+            if let Some(progress) = plain_progress.as_mut() {
+                progress.finish_line();
+            }
+            if let Some(ui) = tui.as_mut() {
+                ui_state.on_prescan_done(totals);
+                let _ = ui.render(&ui_state);
+            } else {
+                println!(
+                    "prescan complete: {} files, {}",
+                    totals.files,
+                    human_bytes(totals.bytes)
+                );
+            }
+            totals
+        }
+        Err(dupdupninja_core::Error::Cancelled) => {
+            cancel_watcher.stop();
+            if let Some(progress) = plain_progress.as_mut() {
+                progress.finish_line();
+            }
+            if let Some(ui) = tui.as_mut() {
+                ui_state.on_cancelled();
+                let _ = ui.render(&ui_state);
+            }
+            drop(tui);
+            println!("scan cancelled during prescan");
+            println!("fileset: {}", db.display());
+            return Ok(());
+        }
+        Err(err) => return Err(err),
+    };
 
     let result = scan_to_sqlite_with_progress_and_totals(
         &cfg,
         &store,
-        None,
+        Some(&cancel_token),
         Some(totals),
         |update: &ScanProgress| {
+            if cancel_token.is_cancelled() {
+                ui_state.on_cancel_requested();
+            }
             if let Some(ui) = tui.as_mut() {
                 ui_state.on_scan_progress(update);
                 if ui_state.should_render(false) {
@@ -206,24 +241,105 @@ fn run_scan_command(args: &mut impl Iterator<Item = String>) -> dupdupninja_core
                 progress.draw_scan(update);
             }
         },
-    )?;
+    );
     if let Some(progress) = plain_progress.as_mut() {
         progress.finish_line();
     }
-    if let Some(ui) = tui.as_mut() {
-        ui_state.on_done(&result);
-        if ui_state.should_render(true) {
-            let _ = ui.render(&ui_state);
+    cancel_watcher.stop();
+    match result {
+        Ok(result) => {
+            if let Some(ui) = tui.as_mut() {
+                ui_state.on_done(&result);
+                if ui_state.should_render(true) {
+                    let _ = ui.render(&ui_state);
+                }
+            }
+            drop(tui);
+            println!(
+                "scan complete: {} files, {} hashed, {} skipped",
+                result.stats.files_seen, result.stats.files_hashed, result.stats.files_skipped
+            );
+            println!("fileset: {}", db.display());
+            Ok(())
+        }
+        Err(dupdupninja_core::Error::Cancelled) => {
+            if let Some(ui) = tui.as_mut() {
+                ui_state.on_cancelled();
+                if ui_state.should_render(true) {
+                    let _ = ui.render(&ui_state);
+                }
+            }
+            drop(tui);
+            println!("scan cancelled");
+            println!("fileset (partial): {}", db.display());
+            Ok(())
+        }
+        Err(err) => Err(err),
+    }
+}
+
+struct CancelInputWatcher {
+    stop_tx: Option<mpsc::Sender<()>>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl CancelInputWatcher {
+    fn start(cancel_token: ScanCancelToken, enabled: bool) -> Self {
+        if !enabled {
+            return Self {
+                stop_tx: None,
+                handle: None,
+            };
+        }
+
+        let (stop_tx, stop_rx) = mpsc::channel::<()>();
+        let handle = thread::spawn(move || loop {
+            if cancel_token.is_cancelled() {
+                break;
+            }
+
+            match stop_rx.try_recv() {
+                Ok(_) | Err(TryRecvError::Disconnected) => break,
+                Err(TryRecvError::Empty) => {}
+            }
+
+            match event::poll(Duration::from_millis(100)) {
+                Ok(true) => match event::read() {
+                    Ok(CEvent::Key(key)) if key.kind == KeyEventKind::Press => match key.code {
+                        KeyCode::Char('q') | KeyCode::Char('Q') | KeyCode::Esc => {
+                            cancel_token.cancel();
+                            break;
+                        }
+                        _ => {}
+                    },
+                    Ok(_) => {}
+                    Err(_) => {}
+                },
+                Ok(false) => {}
+                Err(_) => {}
+            }
+        });
+
+        Self {
+            stop_tx: Some(stop_tx),
+            handle: Some(handle),
         }
     }
-    drop(tui);
 
-    println!(
-        "scan complete: {} files, {} hashed, {} skipped",
-        result.stats.files_seen, result.stats.files_hashed, result.stats.files_skipped
-    );
-    println!("fileset: {}", db.display());
-    Ok(())
+    fn stop(&mut self) {
+        if let Some(tx) = self.stop_tx.take() {
+            let _ = tx.send(());
+        }
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl Drop for CancelInputWatcher {
+    fn drop(&mut self) {
+        self.stop();
+    }
 }
 
 struct ScanUiState {
@@ -233,6 +349,7 @@ struct ScanUiState {
     phase: &'static str,
     current_step: String,
     current_path: PathBuf,
+    active_tasks: Vec<String>,
     files_seen: u64,
     files_hashed: u64,
     files_skipped: u64,
@@ -261,6 +378,7 @@ impl ScanUiState {
             phase: "prescan",
             current_step: "collecting totals".to_string(),
             current_path: PathBuf::new(),
+            active_tasks: Vec::new(),
             files_seen: 0,
             files_hashed: 0,
             files_skipped: 0,
@@ -298,6 +416,11 @@ impl ScanUiState {
             .clone()
             .unwrap_or_else(|| "scan".to_string());
         self.current_path = progress.current_path.clone();
+        self.active_tasks = progress
+            .active_tasks
+            .iter()
+            .map(|task| format!("{} | {}", task.step, shorten_path(&task.path, 96)))
+            .collect();
         self.files_seen = progress.files_seen;
         self.files_hashed = progress.files_hashed;
         self.files_skipped = progress.files_skipped;
@@ -312,9 +435,22 @@ impl ScanUiState {
     fn on_done(&mut self, result: &dupdupninja_core::models::ScanResult) {
         self.phase = "done";
         self.current_step = "complete".to_string();
+        self.active_tasks.clear();
         self.files_seen = result.stats.files_seen;
         self.files_hashed = result.stats.files_hashed;
         self.files_skipped = result.stats.files_skipped;
+    }
+
+    fn on_cancel_requested(&mut self) {
+        self.phase = "cancel";
+        self.current_step = "cancellation requested".to_string();
+        self.active_tasks.clear();
+    }
+
+    fn on_cancelled(&mut self) {
+        self.phase = "cancelled";
+        self.current_step = "cancelled".to_string();
+        self.active_tasks.clear();
     }
 
     fn should_render(&mut self, force: bool) -> bool {
@@ -528,10 +664,40 @@ fn draw_scan_ui(frame: &mut ratatui::Frame<'_>, state: &ScanUiState) {
         Line::from(vec![
             Span::styled("Totals: ", Style::default().fg(Color::Gray)),
             Span::raw(format!(
-                "{} | elapsed {}s",
+                "{} | elapsed {}",
                 human_bytes(state.total_bytes),
-                state.started_at.elapsed().as_secs()
+                human_elapsed(state.started_at.elapsed())
             )),
+        ]),
+        Line::from(vec![
+            Span::styled("Active tasks: ", Style::default().fg(Color::Gray)),
+            Span::raw(
+                state
+                    .active_tasks
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "-".to_string()),
+            ),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::raw(
+                state
+                    .active_tasks
+                    .get(1)
+                    .cloned()
+                    .unwrap_or_else(|| "".to_string()),
+            ),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::raw(
+                state
+                    .active_tasks
+                    .get(2)
+                    .cloned()
+                    .unwrap_or_else(|| "".to_string()),
+            ),
         ]),
     ])
     .block(
@@ -548,17 +714,18 @@ fn draw_scan_ui(frame: &mut ratatui::Frame<'_>, state: &ScanUiState) {
     .wrap(Wrap { trim: false });
     frame.render_widget(details, chunks[3]);
 
-    let footer = Paragraph::new("Press Ctrl+C to abort the process.").block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_set(if pretty {
-                border::ROUNDED
-            } else {
-                border::PLAIN
-            })
-            .border_style(border_style)
-            .title(section_title("Control")),
-    );
+    let footer = Paragraph::new("Press q or Esc to cancel scan (or Ctrl+C to abort process).")
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_set(if pretty {
+                    border::ROUNDED
+                } else {
+                    border::PLAIN
+                })
+                .border_style(border_style)
+                .title(section_title("Control")),
+        );
     frame.render_widget(footer, chunks[4]);
 }
 
@@ -618,6 +785,24 @@ fn default_fileset_dir() -> PathBuf {
     path
 }
 
+fn human_elapsed(d: Duration) -> String {
+    let total = d.as_secs();
+    let days = total / 86_400;
+    let hours = (total % 86_400) / 3_600;
+    let mins = (total % 3_600) / 60;
+    let secs = total % 60;
+
+    if days > 0 {
+        format!("{days}d {hours}h {mins}m {secs}s")
+    } else if hours > 0 {
+        format!("{hours}h {mins}m {secs}s")
+    } else if mins > 0 {
+        format!("{mins}m {secs}s")
+    } else {
+        format!("{secs}s")
+    }
+}
+
 fn root_kind_label(root_kind: ScanRootKind) -> &'static str {
     match root_kind {
         ScanRootKind::Folder => "folder",
@@ -666,15 +851,21 @@ impl TerminalProgress {
         };
         let step = progress.current_step.as_deref().unwrap_or("scan");
         let current = shorten_path(&progress.current_path, 38);
+        let active = progress
+            .active_tasks
+            .first()
+            .map(|task| format!("{}: {}", task.step, shorten_path(&task.path, 24)))
+            .unwrap_or_else(|| "-".to_string());
         let line = format!(
-            "scan {:>5.1}% | files {:>8}/{:<8} | hashed {:>8} | skipped {:>6} | {} | {}",
+            "scan {:>5.1}% | files {:>8}/{:<8} | hashed {:>8} | skipped {:>6} | {} | {} | active {}",
             pct,
             progress.files_seen,
             progress.total_files,
             progress.files_hashed,
             progress.files_skipped,
             step,
-            current
+            current,
+            active
         );
         self.render_line(&line);
     }

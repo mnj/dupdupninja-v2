@@ -82,6 +82,7 @@ pub struct DupdupScanOptions {
     pub capture_snapshots: bool,
     pub snapshots_per_video: u32,
     pub snapshot_max_dim: u32,
+    pub concurrent_processing: bool,
 }
 
 #[repr(C)]
@@ -1422,6 +1423,7 @@ fn default_scan_options() -> DupdupScanOptions {
         capture_snapshots: true,
         snapshots_per_video: 3,
         snapshot_max_dim: 1024,
+        concurrent_processing: true,
     }
 }
 
@@ -1438,6 +1440,7 @@ fn scan_config_from_options(
         capture_snapshots: options.capture_snapshots,
         snapshots_per_video: options.snapshots_per_video.clamp(1, 10),
         snapshot_max_dim: options.snapshot_max_dim.clamp(128, 4096),
+        concurrent_processing: options.concurrent_processing,
     }
 }
 

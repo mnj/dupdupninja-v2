@@ -191,20 +191,43 @@ impl SqliteScanStore {
         Ok(file_id)
     }
 
+    pub fn begin_scan_write_optimized_tx(&self) -> Result<()> {
+        // Favor fewer fsyncs and larger in-memory work buffers while scanning.
+        self.conn.execute_batch(
+            r#"
+            PRAGMA journal_mode = WAL;
+            PRAGMA synchronous = NORMAL;
+            PRAGMA temp_store = MEMORY;
+            PRAGMA cache_size = -32768;
+            PRAGMA wal_autocheckpoint = 2000;
+            BEGIN IMMEDIATE;
+            "#,
+        )?;
+        Ok(())
+    }
+
+    pub fn commit_tx(&self) -> Result<()> {
+        self.conn.execute_batch("COMMIT")?;
+        Ok(())
+    }
+
+    pub fn rollback_tx(&self) -> Result<()> {
+        self.conn.execute_batch("ROLLBACK")?;
+        Ok(())
+    }
+
     pub fn replace_file_snapshots(
         &self,
         file_id: i64,
         snapshots: &[FileSnapshotRecord],
     ) -> Result<()> {
-        self.conn.execute_batch("BEGIN")?;
-        let res: Result<()> = (|| {
-            self.conn.execute(
-                r#"DELETE FROM file_snapshots WHERE file_id = ?1"#,
-                params![file_id],
-            )?;
+        self.conn.execute(
+            r#"DELETE FROM file_snapshots WHERE file_id = ?1"#,
+            params![file_id],
+        )?;
 
-            for snap in snapshots {
-                self.conn.execute(
+        for snap in snapshots {
+            self.conn.execute(
                 r#"
                 INSERT INTO file_snapshots (
                   file_id, snapshot_index, snapshot_count, at_ms, duration_ms, ahash, dhash, phash, image_avif
@@ -221,21 +244,9 @@ impl SqliteScanStore {
                     snap.phash.map(|v| v as i64),
                     &snap.image_avif,
                 ],
-                )?;
-            }
-            Ok(())
-        })();
-
-        match res {
-            Ok(()) => {
-                self.conn.execute_batch("COMMIT")?;
-                Ok(())
-            }
-            Err(e) => {
-                let _ = self.conn.execute_batch("ROLLBACK");
-                Err(e)
-            }
+            )?;
         }
+        Ok(())
     }
 
     pub fn get_fileset_metadata(&self) -> Result<Option<FilesetMetadata>> {
