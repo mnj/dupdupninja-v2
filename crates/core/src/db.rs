@@ -144,10 +144,7 @@ impl SqliteScanStore {
     }
 
     pub fn upsert_file(&self, rec: &MediaFileRecord) -> Result<i64> {
-        let modified_at_secs = rec
-            .modified_at
-            .map(system_time_to_secs)
-            .map(|v| v as i64);
+        let modified_at_secs = rec.modified_at.map(system_time_to_secs).map(|v| v as i64);
 
         let blake3_bytes: Option<Vec<u8>> = rec.blake3.map(|b| b.to_vec());
         let sha256_bytes: Option<Vec<u8>> = rec.sha256.map(|b| b.to_vec());
@@ -186,15 +183,19 @@ impl SqliteScanStore {
         )?;
         let id_col = self.file_id_column();
         let sql = format!("SELECT {id_col} FROM files WHERE path = ?1");
-        let file_id = self.conn.query_row(
-            &sql,
-            params![rec.path.to_string_lossy()],
-            |r| r.get::<_, i64>(0),
-        )?;
+        let file_id = self
+            .conn
+            .query_row(&sql, params![rec.path.to_string_lossy()], |r| {
+                r.get::<_, i64>(0)
+            })?;
         Ok(file_id)
     }
 
-    pub fn replace_file_snapshots(&self, file_id: i64, snapshots: &[FileSnapshotRecord]) -> Result<()> {
+    pub fn replace_file_snapshots(
+        &self,
+        file_id: i64,
+        snapshots: &[FileSnapshotRecord],
+    ) -> Result<()> {
         self.conn.execute_batch("BEGIN")?;
         let res: Result<()> = (|| {
             self.conn.execute(
@@ -274,9 +275,7 @@ impl SqliteScanStore {
                             .as_deref()
                             .map(str_to_root_kind)
                             .unwrap_or(ScanRootKind::Folder),
-                        root_path: root_path
-                            .map(std::path::PathBuf::from)
-                            .unwrap_or_default(),
+                        root_path: root_path.map(std::path::PathBuf::from).unwrap_or_default(),
                         root_parent_path: root_parent_path.map(std::path::PathBuf::from),
                         drive: DriveMetadata {
                             id: drive_id,
@@ -391,7 +390,11 @@ impl SqliteScanStore {
         Ok(out)
     }
 
-    pub fn list_files_with_duplicates(&self, limit: usize, offset: usize) -> Result<Vec<FileListRow>> {
+    pub fn list_files_with_duplicates(
+        &self,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<FileListRow>> {
         let id_col = self.file_id_column();
         let sql = format!(
             r#"
@@ -559,8 +562,7 @@ impl SqliteScanStore {
                     file_id: Some(file_id),
                     path: Path::new(r.get::<_, String>(0)?.as_str()).to_path_buf(),
                     size_bytes: r.get::<_, i64>(1)? as u64,
-                    modified_at: modified_at_secs
-                        .map(|v| secs_to_system_time(v.max(0) as u64)),
+                    modified_at: modified_at_secs.map(|v| secs_to_system_time(v.max(0) as u64)),
                     blake3: blob_to_hash(blake3),
                     sha256: blob_to_hash(sha256),
                     ahash: ahash.map(|v| v as u64),
@@ -596,8 +598,7 @@ impl SqliteScanStore {
                     file_id: Some(r.get(0)?),
                     path: path.to_path_buf(),
                     size_bytes: r.get::<_, i64>(1)? as u64,
-                    modified_at: modified_at_secs
-                        .map(|v| secs_to_system_time(v.max(0) as u64)),
+                    modified_at: modified_at_secs.map(|v| secs_to_system_time(v.max(0) as u64)),
                     blake3: blob_to_hash(blake3),
                     sha256: blob_to_hash(sha256),
                     ahash: ahash.map(|v| v as u64),

@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use adw::prelude::*;
-use gtk4 as gtk;
 use gtk::glib::prelude::Cast;
 use gtk::prelude::GtkWindowExt;
+use gtk4 as gtk;
 
 use dupdupninja_core::models::{FileListRow, FileSnapshotRecord};
 use dupdupninja_core::MediaFileRecord;
@@ -27,7 +27,10 @@ pub(crate) struct RowItem {
 #[derive(Clone)]
 pub(crate) enum RowKind {
     File(FileRow),
-    MatchGroup { label: String, matches: Vec<FileRow> },
+    MatchGroup {
+        label: String,
+        matches: Vec<FileRow>,
+    },
     MatchItem(FileRow),
 }
 
@@ -131,9 +134,7 @@ pub(crate) fn build_files_column_view(
                 return;
             }
             let file_id = unsafe { cb.data::<i64>("ddn-file-id").map(|v| *v.as_ref()) };
-            let rel_path = unsafe {
-                cb.data::<PathBuf>("ddn-path").map(|p| p.as_ref().clone())
-            };
+            let rel_path = unsafe { cb.data::<PathBuf>("ddn-path").map(|p| p.as_ref().clone()) };
             let parent_path = unsafe {
                 cb.data::<PathBuf>("ddn-parent-path")
                     .map(|p| p.as_ref().clone())
@@ -188,9 +189,7 @@ pub(crate) fn build_files_column_view(
                         check.set_data("ddn-file-id", file.id);
                         check.set_data("ddn-path", file.path.clone());
                     }
-                    if let Some(parent_path) =
-                        tree_row.as_ref().and_then(find_parent_file_path)
-                    {
+                    if let Some(parent_path) = tree_row.as_ref().and_then(find_parent_file_path) {
                         unsafe {
                             check.set_data("ddn-parent-path", parent_path);
                         }
@@ -200,10 +199,7 @@ pub(crate) fn build_files_column_view(
                     let selected = ui_state_for_bind
                         .try_borrow()
                         .ok()
-                        .and_then(|s| {
-                            s.as_ref()
-                                .map(|s| s.selected_files.contains_key(&file.id))
-                        })
+                        .and_then(|s| s.as_ref().map(|s| s.selected_files.contains_key(&file.id)))
                         .unwrap_or(false);
                     if let Some(setting) = unsafe {
                         check
@@ -527,40 +523,44 @@ pub(crate) fn build_file_action_bar(ui_state: Rc<RefCell<Option<UiState>>>) -> F
 
     let ui_state_for_actions = ui_state.clone();
     replace_symlink.connect_clicked(move |_| {
-        apply_to_selected_with_parent(&ui_state_for_actions, "replace_symlink", |path, parent_path| {
-            if path == parent_path {
-                return Ok("Skipped parent file".to_string());
-            }
-            if !parent_path.exists() {
-                return Err("Parent file no longer exists".to_string());
-            }
-            #[cfg(unix)]
-            {
-                let backup = unique_backup_path(path);
-                std::fs::rename(path, &backup).map_err(|e| e.to_string())?;
-                match std::os::unix::fs::symlink(parent_path, path) {
-                    Ok(_) => {
-                        if let Ok(meta) = std::fs::symlink_metadata(path) {
-                            if meta.file_type().is_symlink() {
-                                let _ = std::fs::remove_file(&backup);
-                                return Ok("Replaced with symlink".to_string());
+        apply_to_selected_with_parent(
+            &ui_state_for_actions,
+            "replace_symlink",
+            |path, parent_path| {
+                if path == parent_path {
+                    return Ok("Skipped parent file".to_string());
+                }
+                if !parent_path.exists() {
+                    return Err("Parent file no longer exists".to_string());
+                }
+                #[cfg(unix)]
+                {
+                    let backup = unique_backup_path(path);
+                    std::fs::rename(path, &backup).map_err(|e| e.to_string())?;
+                    match std::os::unix::fs::symlink(parent_path, path) {
+                        Ok(_) => {
+                            if let Ok(meta) = std::fs::symlink_metadata(path) {
+                                if meta.file_type().is_symlink() {
+                                    let _ = std::fs::remove_file(&backup);
+                                    return Ok("Replaced with symlink".to_string());
+                                }
                             }
+                            let _ = std::fs::remove_file(path);
+                            let _ = std::fs::rename(&backup, path);
+                            Err("Symlink verification failed".to_string())
                         }
-                        let _ = std::fs::remove_file(path);
-                        let _ = std::fs::rename(&backup, path);
-                        Err("Symlink verification failed".to_string())
-                    }
-                    Err(err) => {
-                        let _ = std::fs::rename(&backup, path);
-                        Err(err.to_string())
+                        Err(err) => {
+                            let _ = std::fs::rename(&backup, path);
+                            Err(err.to_string())
+                        }
                     }
                 }
-            }
-            #[cfg(not(unix))]
-            {
-                Err("Symlink replacement is only supported on Unix".to_string())
-            }
-        });
+                #[cfg(not(unix))]
+                {
+                    Err("Symlink replacement is only supported on Unix".to_string())
+                }
+            },
+        );
     });
 
     let ui_state_for_actions = ui_state.clone();
@@ -592,10 +592,7 @@ pub(crate) fn build_file_action_bar(ui_state: Rc<RefCell<Option<UiState>>>) -> F
 
 #[cfg(unix)]
 fn unique_backup_path(path: &Path) -> PathBuf {
-    let base = path
-        .file_name()
-        .and_then(|v| v.to_str())
-        .unwrap_or("file");
+    let base = path.file_name().and_then(|v| v.to_str()).unwrap_or("file");
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let mut candidate = dir.join(format!("{base}.ddn-bak"));
     if !candidate.exists() {
@@ -627,11 +624,7 @@ pub(crate) fn update_action_bar_state(state: &mut UiState) {
     state.action_bar_buttons.compare.set_sensitive(enabled);
 }
 
-fn apply_to_selected<F>(
-    ui_state: &Rc<RefCell<Option<UiState>>>,
-    action_name: &str,
-    mut action: F,
-)
+fn apply_to_selected<F>(ui_state: &Rc<RefCell<Option<UiState>>>, action_name: &str, mut action: F)
 where
     F: FnMut(&Path) -> std::result::Result<String, String>,
 {
@@ -698,8 +691,7 @@ fn apply_to_selected_with_parent<F>(
     ui_state: &Rc<RefCell<Option<UiState>>>,
     action_name: &str,
     mut action: F,
-)
-where
+) where
     F: FnMut(&Path, &Path) -> std::result::Result<String, String>,
 {
     let (paths, db_path) = {
@@ -850,9 +842,16 @@ fn open_compare_window(ui_state: &Rc<RefCell<Option<UiState>>>) {
         };
         let mut grouped = std::collections::BTreeMap::<PathBuf, Vec<i64>>::new();
         for (id, selected) in &state.selected_files {
-            grouped.entry(selected.parent_rel_path.clone()).or_default().push(*id);
+            grouped
+                .entry(selected.parent_rel_path.clone())
+                .or_default()
+                .push(*id);
         }
-        (entry.db_path.clone(), entry.metadata.root_path.clone(), grouped)
+        (
+            entry.db_path.clone(),
+            entry.metadata.root_path.clone(),
+            grouped,
+        )
     };
 
     if selections.is_empty() {
@@ -863,10 +862,7 @@ fn open_compare_window(ui_state: &Rc<RefCell<Option<UiState>>>) {
     let store = match dupdupninja_core::db::SqliteScanStore::open(&db_path) {
         Ok(store) => store,
         Err(err) => {
-            update_status(
-                ui_state,
-                Err(format!("Failed to open fileset: {err}")),
-            );
+            update_status(ui_state, Err(format!("Failed to open fileset: {err}")));
             return;
         }
     };
@@ -909,7 +905,10 @@ fn open_compare_window(ui_state: &Rc<RefCell<Option<UiState>>>) {
     }
 
     if notebook.n_pages() == 0 {
-        update_status(ui_state, Err("No metadata available to compare".to_string()));
+        update_status(
+            ui_state,
+            Err("No metadata available to compare".to_string()),
+        );
         return;
     }
 
@@ -964,10 +963,7 @@ fn compare_window_default_size(ui_state: &Rc<RefCell<Option<UiState>>>) -> (i32,
         }
     }
 
-    (
-        width.max(min_width) as i32,
-        height.max(min_height) as i32,
-    )
+    (width.max(min_width) as i32, height.max(min_height) as i32)
 }
 
 struct CompareFile {
@@ -983,13 +979,7 @@ fn build_compare_tab(
 ) -> gtk::Widget {
     let rows = metadata_rows(max_snapshots);
     let parent_title = format!("Parent: {}", display_name(&parent.record));
-    let parent_column = build_metadata_column(
-        &parent_title,
-        &rows,
-        parent,
-        root_path,
-        true,
-    );
+    let parent_column = build_metadata_column(&parent_title, &rows, parent, root_path, true);
 
     let matches_box = gtk::Box::new(gtk::Orientation::Horizontal, 16);
     for file in matches {
@@ -1154,16 +1144,8 @@ fn metadata_value(field: &MetadataField, record: &MediaFileRecord, root_path: &P
             .map(|d| format!("{}s", d.as_secs()))
             .unwrap_or_else(|| "Unknown".to_string()),
         MetadataField::FileType => record.file_type.clone().unwrap_or_default(),
-        MetadataField::Blake3 => record
-            .blake3
-            .as_ref()
-            .map(hash_to_hex)
-            .unwrap_or_default(),
-        MetadataField::Sha256 => record
-            .sha256
-            .as_ref()
-            .map(hash_to_hex)
-            .unwrap_or_default(),
+        MetadataField::Blake3 => record.blake3.as_ref().map(hash_to_hex).unwrap_or_default(),
+        MetadataField::Sha256 => record.sha256.as_ref().map(hash_to_hex).unwrap_or_default(),
         MetadataField::Ffmpeg => record.ffmpeg_metadata.clone().unwrap_or_default(),
     }
 }

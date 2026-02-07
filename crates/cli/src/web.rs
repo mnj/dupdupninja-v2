@@ -41,10 +41,7 @@ async fn run_web_server_async(port: u16) -> Result<()> {
         .route("/scan", post(start_scan_handler))
         .route("/cancel/:id", post(cancel_scan_handler))
         .route("/api/jobs", get(list_jobs_handler))
-        .route(
-            "/api/filesets/:id/matches",
-            get(list_matches_handler),
-        )
+        .route("/api/filesets/:id/matches", get(list_matches_handler))
         .route(
             "/api/filesets/:id/snapshots/:file_id/:index",
             get(snapshot_handler),
@@ -107,12 +104,29 @@ enum JobStatus {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ServerEvent {
-    ScanStarted { id: u64, root: String, db_path: String },
-    ScanProgress { id: u64, progress: ProgressDto },
-    ScanDone { id: u64, stats: ScanStatsDto },
-    ScanCancelled { id: u64 },
-    ScanError { id: u64, message: String },
-    MatchesUpdated { id: u64 },
+    ScanStarted {
+        id: u64,
+        root: String,
+        db_path: String,
+    },
+    ScanProgress {
+        id: u64,
+        progress: ProgressDto,
+    },
+    ScanDone {
+        id: u64,
+        stats: ScanStatsDto,
+    },
+    ScanCancelled {
+        id: u64,
+    },
+    ScanError {
+        id: u64,
+        message: String,
+    },
+    MatchesUpdated {
+        id: u64,
+    },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -215,17 +229,15 @@ async fn sse_events(
     State(state): State<Arc<AppState>>,
 ) -> Sse<impl tokio_stream::Stream<Item = std::result::Result<Event, Infallible>>> {
     let rx = state.events_tx.subscribe();
-    let stream = BroadcastStream::new(rx).filter_map(|item| {
-        match item {
-            Ok(event) => {
-                let payload = match serde_json::to_string(&event) {
-                    Ok(payload) => payload,
-                    Err(_) => return None,
-                };
-                Some(Ok(Event::default().data(payload)))
-            }
-            Err(_) => None,
+    let stream = BroadcastStream::new(rx).filter_map(|item| match item {
+        Ok(event) => {
+            let payload = match serde_json::to_string(&event) {
+                Ok(payload) => payload,
+                Err(_) => return None,
+            };
+            Some(Ok(Event::default().data(payload)))
         }
+        Err(_) => None,
     });
 
     Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(10)))
@@ -269,7 +281,9 @@ async fn list_jobs_handler(State(state): State<Arc<AppState>>) -> Json<Vec<JobDt
             progress: job.progress.as_ref().map(ProgressDto::from),
             error: job.error.clone(),
             started_secs: job.started_at.elapsed().as_secs(),
-            finished_secs: job.finished_at.map(|done| done.duration_since(job.started_at).as_secs()),
+            finished_secs: job
+                .finished_at
+                .map(|done| done.duration_since(job.started_at).as_secs()),
         })
         .collect();
     Json(jobs)
@@ -304,7 +318,11 @@ async fn list_matches_handler(
     .await;
 
     match result {
-        Ok(Ok(groups)) => Json(MatchesResponse { fileset_id: id, groups }).into_response(),
+        Ok(Ok(groups)) => Json(MatchesResponse {
+            fileset_id: id,
+            groups,
+        })
+        .into_response(),
         Ok(Err(err)) => (axum::http::StatusCode::BAD_REQUEST, err.to_string()).into_response(),
         Err(_) => (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
@@ -339,9 +357,11 @@ async fn snapshot_handler(
     .await;
 
     match snapshot {
-        Ok(Ok(Some(snap))) => {
-            ([(axum::http::header::CONTENT_TYPE, "image/avif")], snap.image_avif).into_response()
-        }
+        Ok(Ok(Some(snap))) => (
+            [(axum::http::header::CONTENT_TYPE, "image/avif")],
+            snap.image_avif,
+        )
+            .into_response(),
         Ok(Ok(None)) => (axum::http::StatusCode::NOT_FOUND, "Snapshot not found").into_response(),
         Ok(Err(err)) => (axum::http::StatusCode::BAD_REQUEST, err.to_string()).into_response(),
         Err(_) => (
@@ -422,12 +442,10 @@ async fn start_scan(state: Arc<AppState>, form: ScanForm) -> Result<()> {
                     job.error = Some(format!("Failed to open DB: {err}"));
                     job.finished_at = Some(Instant::now());
                 });
-                let _ = state_for_task
-                    .events_tx
-                    .send(ServerEvent::ScanError {
-                        id,
-                        message: "Failed to open DB".to_string(),
-                    });
+                let _ = state_for_task.events_tx.send(ServerEvent::ScanError {
+                    id,
+                    message: "Failed to open DB".to_string(),
+                });
                 return;
             }
         };
@@ -436,12 +454,10 @@ async fn start_scan(state: Arc<AppState>, form: ScanForm) -> Result<()> {
             update_job(&state_for_task, id, |job| {
                 job.progress = Some(progress.clone());
             });
-            let _ = state_for_task
-                .events_tx
-                .send(ServerEvent::ScanProgress {
-                    id,
-                    progress: ProgressDto::from(progress),
-                });
+            let _ = state_for_task.events_tx.send(ServerEvent::ScanProgress {
+                id,
+                progress: ProgressDto::from(progress),
+            });
         });
 
         match result {
@@ -454,7 +470,9 @@ async fn start_scan(state: Arc<AppState>, form: ScanForm) -> Result<()> {
                     id,
                     stats: ScanStatsDto::from(&result),
                 });
-                let _ = state_for_task.events_tx.send(ServerEvent::MatchesUpdated { id });
+                let _ = state_for_task
+                    .events_tx
+                    .send(ServerEvent::MatchesUpdated { id });
             }
             Err(Error::Cancelled) => {
                 update_job(&state_for_task, id, |job| {

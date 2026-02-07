@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::{PathBuf};
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -64,14 +64,25 @@ pub(crate) struct UiState {
 }
 
 pub(crate) enum UiUpdate {
-    PrescanProgress { text: String },
-    PrescanDone { totals: ScanTotals },
+    PrescanProgress {
+        text: String,
+    },
+    PrescanDone {
+        totals: ScanTotals,
+    },
     Progress {
         text: String,
         detail: Option<String>,
         fraction: Option<f64>,
     },
-    Done { text: String },
-    Cancelled { text: String, fileset_id: u64 },
-    Error { text: String },
+    Done {
+        text: String,
+    },
+    Cancelled {
+        text: String,
+        fileset_id: u64,
+    },
+    Error {
+        text: String,
+    },
 }

@@ -14,4 +14,3 @@ pub struct VideoSignature {
 pub trait VideoAnalyzer {
     fn signature(&self, path: &Path) -> Result<VideoSignature>;
 }
-
