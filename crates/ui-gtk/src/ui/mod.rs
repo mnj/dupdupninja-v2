@@ -7,9 +7,9 @@ use state::{FilesetEntry, UiState, UiUpdate};
 #[cfg(all(target_os = "linux", feature = "gtk"))]
 pub fn run() {
     use adw::prelude::*;
-    use gtk4 as gtk;
     use gtk::gio;
     use gtk::glib;
+    use gtk4 as gtk;
     use std::cell::RefCell;
     use std::rc::Rc;
     const APP_ID: &str = "com.dupdupninja.app";
@@ -82,8 +82,7 @@ pub fn run() {
                     if let Some(path) = path {
                         let db_path = scan_db_path(&path);
                         let name = fileset_name_from_path(&path);
-                        let fileset_id =
-                            add_fileset(ui_state.clone(), name, db_path.clone());
+                        let fileset_id = add_fileset(ui_state.clone(), name, db_path.clone());
                         start_scan(
                             ui_state.clone(),
                             path,
@@ -147,7 +146,13 @@ pub fn run() {
                 let (initial_capture, initial_count, initial_max_dim) = ui_state
                     .borrow()
                     .as_ref()
-                    .map(|s| (s.capture_snapshots, s.snapshots_per_video, s.snapshot_max_dim))
+                    .map(|s| {
+                        (
+                            s.capture_snapshots,
+                            s.snapshots_per_video,
+                            s.snapshot_max_dim,
+                        )
+                    })
                     .unwrap_or((true, 3, 1024));
 
                 let settings_window = gtk::Window::builder()
@@ -330,17 +335,17 @@ pub fn run() {
                             Some(&settings_window),
                             None::<&gio::Cancellable>,
                             move |res| {
-                            if let Ok(folder) = res {
-                                if let Some(path) = folder.path() {
-                                    let mut settings = settings_state_for_dialog.borrow_mut();
-                                    settings.fileset_dir = Some(path);
-                                    if save_settings(&settings).is_ok() {
-                                        update_fileset_path_label(&fileset_path, &settings);
-                                        reset_button.set_sensitive(true);
+                                if let Ok(folder) = res {
+                                    if let Some(path) = folder.path() {
+                                        let mut settings = settings_state_for_dialog.borrow_mut();
+                                        settings.fileset_dir = Some(path);
+                                        if save_settings(&settings).is_ok() {
+                                            update_fileset_path_label(&fileset_path, &settings);
+                                            reset_button.set_sensitive(true);
+                                        }
                                     }
                                 }
-                            }
-                        },
+                            },
                         );
                     }
                 ));
@@ -482,11 +487,8 @@ pub fn run() {
             std::rc::Rc::new(std::cell::RefCell::new(None));
         let files_root_store = gio::ListStore::new::<gtk4::glib::BoxedAnyObject>();
         let files_db_path_for_model = files_db_path.clone();
-        let files_tree_model = gtk::TreeListModel::new(
-            files_root_store.clone(),
-            false,
-            false,
-            move |obj| {
+        let files_tree_model =
+            gtk::TreeListModel::new(files_root_store.clone(), false, false, move |obj| {
                 let db_path = files_db_path_for_model.borrow().clone()?;
                 let row_item = obj
                     .downcast_ref::<gtk4::glib::BoxedAnyObject>()?
@@ -509,14 +511,15 @@ pub fn run() {
                     RowKind::MatchGroup { matches, .. } => {
                         let list = gio::ListStore::new::<gtk4::glib::BoxedAnyObject>();
                         for item in matches {
-                            list.append(&gtk4::glib::BoxedAnyObject::new(RowItem::match_item(item)));
+                            list.append(&gtk4::glib::BoxedAnyObject::new(RowItem::match_item(
+                                item,
+                            )));
                         }
                         Some(list.upcast())
                     }
                     RowKind::MatchItem(_) => None,
                 }
-            },
-        );
+            });
 
         let files_selection = gtk::NoSelection::new(Some(files_tree_model.clone()));
         let files_view = build_files_column_view(&files_selection, ui_state_for_activate.clone());
@@ -679,29 +682,6 @@ pub fn run() {
                                 state.progress.set_text(Some("Scanning..."));
                                 state.progress.pulse();
                             }
-                            if let (Some(active_id), Some(scan_id)) =
-                                (state.active_fileset_id, state.active_scan_fileset_id)
-                            {
-                                if active_id == scan_id {
-                                    let now = std::time::Instant::now();
-                                    let refresh = match state.last_files_refresh {
-                                        Some(last) => now.duration_since(last)
-                                            > std::time::Duration::from_secs(2),
-                                        None => true,
-                                    };
-                                    if refresh {
-                                        if let Some(entry) = state
-                                            .filesets
-                                            .iter()
-                                            .find(|entry| entry.id == active_id)
-                                        {
-                                            let db_path = entry.db_path.clone();
-                                            load_fileset_rows(state, &db_path);
-                                            state.last_files_refresh = Some(now);
-                                        }
-                                    }
-                                }
-                            }
                         }
                         UiUpdate::Done { text } => {
                             state.status_label.set_text(&text);
@@ -729,10 +709,7 @@ pub fn run() {
                                 set_fileset_status(state, fileset_id, "completed");
                             }
                         }
-                        UiUpdate::Cancelled {
-                            text,
-                            fileset_id,
-                        } => {
+                        UiUpdate::Cancelled { text, fileset_id } => {
                             state.status_label.set_text(&text);
                             state.detail_status_label.set_visible(false);
                             state.progress.set_text(Some("Idle"));
@@ -854,18 +831,19 @@ fn start_scan(
             snapshot_max_dim,
         };
 
-    let prescan_result = dupdupninja_core::scan::prescan(&cfg, Some(&cancel_token), |progress| {
-            let folder = progress
-                .current_path
-                .file_name()
-                .and_then(|p| p.to_str())
-                .unwrap_or("folder");
-            let text = format!(
-                "Status: Preparing {} ({} files)",
-                folder, progress.files_seen
-            );
-            let _ = update_tx.send(UiUpdate::PrescanProgress { text });
-        });
+        let prescan_result =
+            dupdupninja_core::scan::prescan(&cfg, Some(&cancel_token), |progress| {
+                let folder = progress
+                    .current_path
+                    .file_name()
+                    .and_then(|p| p.to_str())
+                    .unwrap_or("folder");
+                let text = format!(
+                    "Status: Preparing {} ({} files)",
+                    folder, progress.files_seen
+                );
+                let _ = update_tx.send(UiUpdate::PrescanProgress { text });
+            });
 
         let totals = match prescan_result {
             Ok(totals) => totals,
@@ -898,22 +876,17 @@ fn start_scan(
                     .and_then(|p| p.file_name())
                     .and_then(|p| p.to_str())
                     .unwrap_or("folder");
-                let detail = progress_update
-                    .current_step
-                    .as_deref()
-                    .map(|step| {
-                        let file = progress_update
-                            .current_path
-                            .file_name()
-                            .and_then(|p| p.to_str())
-                            .unwrap_or("file");
-                        format!("{file} • {step}")
-                    });
+                let detail = progress_update.current_step.as_deref().map(|step| {
+                    let file = progress_update
+                        .current_path
+                        .file_name()
+                        .and_then(|p| p.to_str())
+                        .unwrap_or("file");
+                    format!("{file} • {step}")
+                });
                 let text = format!(
                     "Status: Scanning {} ({} / {} files)",
-                    path,
-                    progress_update.files_seen,
-                    progress_update.total_files
+                    path, progress_update.files_seen, progress_update.total_files
                 );
                 let fraction = if progress_update.total_files > 0 {
                     Some(progress_update.files_seen as f64 / progress_update.total_files as f64)
@@ -932,9 +905,7 @@ fn start_scan(
             Ok(result) => UiUpdate::Done {
                 text: format!(
                     "Status: Scan complete ({} files, {} hashed, {} skipped)",
-                    result.stats.files_seen,
-                    result.stats.files_hashed,
-                    result.stats.files_skipped
+                    result.stats.files_seen, result.stats.files_hashed, result.stats.files_skipped
                 ),
             },
             Err(dupdupninja_core::Error::Cancelled) => UiUpdate::Cancelled {
@@ -1102,21 +1073,11 @@ fn add_fileset(
             let row = existing.row.clone();
             state.active_fileset_id = Some(id);
             update_fileset_placeholder(state);
-            (
-                state.fileset_list.clone(),
-                id,
-                ui_state.clone(),
-                Some(row),
-            )
+            (state.fileset_list.clone(), id, ui_state.clone(), Some(row))
         } else {
             let id = state.next_fileset_id;
             state.next_fileset_id += 1;
-            (
-                state.fileset_list.clone(),
-                id,
-                ui_state.clone(),
-                None,
-            )
+            (state.fileset_list.clone(), id, ui_state.clone(), None)
         }
     };
 
@@ -1299,7 +1260,11 @@ fn set_fileset_scanning(state: &mut UiState, fileset_id: u64, scanning: bool) {
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]
 fn set_fileset_status(state: &mut UiState, fileset_id: u64, status: &str) {
-    if let Some(entry) = state.filesets.iter_mut().find(|entry| entry.id == fileset_id) {
+    if let Some(entry) = state
+        .filesets
+        .iter_mut()
+        .find(|entry| entry.id == fileset_id)
+    {
         if let Ok(store) = dupdupninja_core::db::SqliteScanStore::open(&entry.db_path) {
             if let Ok(Some(meta)) = store.get_fileset_metadata() {
                 entry.metadata = meta;
@@ -1385,7 +1350,11 @@ fn remove_fileset_by_id(
         let Some(state) = state.as_mut() else {
             return;
         };
-        let pos = match state.filesets.iter().position(|entry| entry.id == fileset_id) {
+        let pos = match state
+            .filesets
+            .iter()
+            .position(|entry| entry.id == fileset_id)
+        {
             Some(pos) => pos,
             None => return,
         };
@@ -1598,7 +1567,11 @@ fn open_fileset_properties(
         }
 
         if let Some(state) = ui_state_for_save.borrow_mut().as_mut() {
-            if let Some(entry) = state.filesets.iter_mut().find(|entry| entry.id == fileset_id) {
+            if let Some(entry) = state
+                .filesets
+                .iter_mut()
+                .find(|entry| entry.id == fileset_id)
+            {
                 entry.metadata = meta;
                 apply_fileset_metadata(&entry.action_row, &entry.metadata);
                 if state.active_fileset_id == Some(fileset_id) {
@@ -1623,8 +1596,8 @@ where
     F: Fn(Option<std::path::PathBuf>) + 'static,
 {
     use adw::prelude::*;
-    use gtk4 as gtk;
     use gtk::gio;
+    use gtk4 as gtk;
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 8);
     content.set_margin_top(12);
