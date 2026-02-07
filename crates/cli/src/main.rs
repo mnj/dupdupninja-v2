@@ -82,14 +82,14 @@ fn print_help() {
         r#"dupdupninja
 
 USAGE:
-  dupdupninja scan --root <path> [--db <fileset.ddn>] [--drive|--folder] [--single-threaded|--concurrent]
+  dupdupninja scan --root <path> [--db <fileset.ddn>] [--drive|--folder] [--single-threaded|--concurrent] [--capture-snapshots|--no-snapshots] [--snapshots-per-video <n>] [--snapshot-max-dim <px>]
   dupdupninja matches --db <sqlite_path> [--mode <all|similar|exact>] [--tui|--plain] [--max-files <n>] [--ahash <n>] [--dhash <n>] [--phash <n>]
   dupdupninja web [--port <port>]
 
 NOTES:
   - Filesets are stored as standalone SQLite DBs (one per scan).
   - `scan` writes live progress in-place in the terminal (no scrolling log spam).
-  - Snapshot capture is currently disabled in CLI scan mode.
+  - Snapshot capture is optional in CLI scan mode (`--capture-snapshots`).
   - Scan processing is concurrent by default.
   - UI crates are present but stubbed; the CLI is the initial entrypoint.
   - Web UI listens on http://127.0.0.1:4455 by default.
@@ -102,6 +102,9 @@ fn run_scan_command(args: &mut impl Iterator<Item = String>) -> dupdupninja_core
     let mut db: Option<PathBuf> = None;
     let mut root_kind = ScanRootKind::Folder;
     let mut concurrent_processing = true;
+    let mut capture_snapshots = false;
+    let mut snapshots_per_video: u32 = 3;
+    let mut snapshot_max_dim: u32 = 1024;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -125,6 +128,32 @@ fn run_scan_command(args: &mut impl Iterator<Item = String>) -> dupdupninja_core
             "--folder" => root_kind = ScanRootKind::Folder,
             "--single-threaded" => concurrent_processing = false,
             "--concurrent" => concurrent_processing = true,
+            "--capture-snapshots" => capture_snapshots = true,
+            "--no-snapshots" => capture_snapshots = false,
+            "--snapshots-per-video" => {
+                let value = args.next().ok_or_else(|| {
+                    dupdupninja_core::Error::InvalidArgument(
+                        "missing value for --snapshots-per-video <n>".to_string(),
+                    )
+                })?;
+                snapshots_per_video = value.parse().map_err(|_| {
+                    dupdupninja_core::Error::InvalidArgument(format!(
+                        "invalid --snapshots-per-video value: {value}"
+                    ))
+                })?;
+            }
+            "--snapshot-max-dim" => {
+                let value = args.next().ok_or_else(|| {
+                    dupdupninja_core::Error::InvalidArgument(
+                        "missing value for --snapshot-max-dim <px>".to_string(),
+                    )
+                })?;
+                snapshot_max_dim = value.parse().map_err(|_| {
+                    dupdupninja_core::Error::InvalidArgument(format!(
+                        "invalid --snapshot-max-dim value: {value}"
+                    ))
+                })?;
+            }
             _ => {
                 return Err(dupdupninja_core::Error::InvalidArgument(format!(
                     "unknown arg: {arg}"
@@ -136,6 +165,16 @@ fn run_scan_command(args: &mut impl Iterator<Item = String>) -> dupdupninja_core
     let root = root.ok_or_else(|| {
         dupdupninja_core::Error::InvalidArgument("missing --root <path>".to_string())
     })?;
+    if capture_snapshots && snapshots_per_video == 0 {
+        return Err(dupdupninja_core::Error::InvalidArgument(
+            "--snapshots-per-video must be > 0 when --capture-snapshots is enabled".to_string(),
+        ));
+    }
+    if capture_snapshots && snapshot_max_dim == 0 {
+        return Err(dupdupninja_core::Error::InvalidArgument(
+            "--snapshot-max-dim must be > 0 when --capture-snapshots is enabled".to_string(),
+        ));
+    }
     let db = db.unwrap_or_else(|| scan_db_path(&root));
     let store = SqliteScanStore::open(&db)?;
     let cfg = ScanConfig {
@@ -143,11 +182,16 @@ fn run_scan_command(args: &mut impl Iterator<Item = String>) -> dupdupninja_core
         root_kind,
         hash_files: true,
         perceptual_hashes: true,
-        capture_snapshots: false,
-        snapshots_per_video: 0,
-        snapshot_max_dim: 0,
+        capture_snapshots,
+        snapshots_per_video,
+        snapshot_max_dim,
         concurrent_processing,
     };
+    let snapshots_label = snapshot_settings_label(
+        cfg.capture_snapshots,
+        cfg.snapshots_per_video,
+        cfg.snapshot_max_dim,
+    );
 
     let mut tui = match ScanTui::start() {
         Ok(tui) => Some(tui),
@@ -168,6 +212,7 @@ fn run_scan_command(args: &mut impl Iterator<Item = String>) -> dupdupninja_core
         root_kind,
         visual_mode,
         concurrent_processing,
+        snapshots_label.clone(),
     );
     let cancel_token = ScanCancelToken::new();
     let mut cancel_watcher = CancelInputWatcher::start(cancel_token.clone(), tui.is_some());
@@ -177,7 +222,7 @@ fn run_scan_command(args: &mut impl Iterator<Item = String>) -> dupdupninja_core
         println!("root: {}", root.display());
         println!("root kind: {}", root_kind_label(root_kind));
         println!("db: {}", db.display());
-        println!("snapshots: disabled");
+        println!("snapshots: {snapshots_label}");
     }
 
     let prescan_result = prescan(&cfg, Some(&cancel_token), |update: &PrescanProgress| {
@@ -352,6 +397,7 @@ struct ScanUiState {
     root: PathBuf,
     db: PathBuf,
     root_kind: ScanRootKind,
+    snapshots_label: String,
     phase: &'static str,
     current_step: String,
     current_path: PathBuf,
@@ -383,11 +429,13 @@ impl ScanUiState {
         root_kind: ScanRootKind,
         visual_mode: VisualMode,
         concurrent_processing: bool,
+        snapshots_label: String,
     ) -> Self {
         Self {
             root,
             db,
             root_kind,
+            snapshots_label,
             phase: "prescan",
             current_step: "collecting totals".to_string(),
             current_path: PathBuf::new(),
@@ -594,7 +642,14 @@ fn draw_scan_ui(frame: &mut ratatui::Frame<'_>, state: &ScanUiState) {
         ]),
         Line::from(vec![
             Span::styled("Snapshots: ", Style::default().fg(Color::Gray)),
-            Span::styled("disabled", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                state.snapshots_label.clone(),
+                if state.snapshots_label == "disabled" {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default().fg(Color::Green)
+                },
+            ),
         ]),
     ])
     .block(
@@ -831,6 +886,18 @@ fn root_kind_label(root_kind: ScanRootKind) -> &'static str {
     match root_kind {
         ScanRootKind::Folder => "folder",
         ScanRootKind::Drive => "drive",
+    }
+}
+
+fn snapshot_settings_label(
+    capture_snapshots: bool,
+    snapshots_per_video: u32,
+    snapshot_max_dim: u32,
+) -> String {
+    if !capture_snapshots {
+        "disabled".to_string()
+    } else {
+        format!("{snapshots_per_video} per video @ {snapshot_max_dim}px")
     }
 }
 
