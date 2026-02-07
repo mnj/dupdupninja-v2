@@ -408,10 +408,7 @@ where
                     total_bytes: totals.bytes,
                     current_path: path.to_path_buf(),
                     current_step: Some(step.to_string()),
-                    active_tasks: vec![ActiveScanTask {
-                        path: path.to_path_buf(),
-                        step: step.to_string(),
-                    }],
+                    active_tasks: Vec::new(),
                 });
             });
 
@@ -463,10 +460,8 @@ where
 }
 
 fn active_task_list(active: &BTreeMap<PathBuf, String>) -> Vec<ActiveScanTask> {
-    const MAX_ACTIVE_TASKS: usize = 8;
     active
         .iter()
-        .take(MAX_ACTIVE_TASKS)
         .map(|(path, step)| ActiveScanTask {
             path: path.clone(),
             step: step.clone(),
@@ -519,8 +514,10 @@ where
         Ok(None) => None,
         Err(_) => None,
     };
-    on_stage(&path, "ffprobe metadata");
-    rec.ffmpeg_metadata = ffprobe_metadata(&path);
+    if is_ffprobe_candidate(&path, rec.file_type.as_deref()) {
+        on_stage(&path, "ffprobe metadata");
+        rec.ffmpeg_metadata = ffprobe_metadata(&path);
+    }
 
     if config.perceptual_hashes && !linked_file && is_image_file(&path, rec.file_type.as_deref()) {
         on_stage(&path, "ahash/dhash/phash");
@@ -713,6 +710,41 @@ fn is_video_file(path: &Path, file_type: Option<&str>) -> bool {
             | Some("ogv")
             | Some("mxf")
     )
+}
+
+fn is_audio_file(path: &Path, file_type: Option<&str>) -> bool {
+    if let Some(mime) = file_type {
+        if mime.starts_with("audio/") {
+            return true;
+        }
+    }
+
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase());
+
+    matches!(
+        ext.as_deref(),
+        Some("mp3")
+            | Some("m4a")
+            | Some("aac")
+            | Some("flac")
+            | Some("wav")
+            | Some("ogg")
+            | Some("opus")
+            | Some("wma")
+            | Some("aiff")
+            | Some("alac")
+            | Some("ape")
+            | Some("amr")
+    )
+}
+
+fn is_ffprobe_candidate(path: &Path, file_type: Option<&str>) -> bool {
+    is_video_file(path, file_type)
+        || is_audio_file(path, file_type)
+        || is_image_file(path, file_type)
 }
 
 fn video_snapshots_for_file(

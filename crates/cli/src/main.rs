@@ -162,7 +162,13 @@ fn run_scan_command(args: &mut impl Iterator<Item = String>) -> dupdupninja_core
         None
     };
     let visual_mode = detect_visual_mode();
-    let mut ui_state = ScanUiState::new(root.clone(), db.clone(), root_kind, visual_mode);
+    let mut ui_state = ScanUiState::new(
+        root.clone(),
+        db.clone(),
+        root_kind,
+        visual_mode,
+        concurrent_processing,
+    );
     let cancel_token = ScanCancelToken::new();
     let mut cancel_watcher = CancelInputWatcher::start(cancel_token.clone(), tui.is_some());
     if let Some(ui) = tui.as_mut() {
@@ -361,6 +367,7 @@ struct ScanUiState {
     last_render: Instant,
     started_at: Instant,
     visual_mode: VisualMode,
+    concurrent_processing: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -370,7 +377,13 @@ enum VisualMode {
 }
 
 impl ScanUiState {
-    fn new(root: PathBuf, db: PathBuf, root_kind: ScanRootKind, visual_mode: VisualMode) -> Self {
+    fn new(
+        root: PathBuf,
+        db: PathBuf,
+        root_kind: ScanRootKind,
+        visual_mode: VisualMode,
+        concurrent_processing: bool,
+    ) -> Self {
         Self {
             root,
             db,
@@ -392,6 +405,7 @@ impl ScanUiState {
                 .unwrap_or_else(Instant::now),
             started_at: Instant::now(),
             visual_mode,
+            concurrent_processing,
         }
     }
 
@@ -622,8 +636,59 @@ fn draw_scan_ui(frame: &mut ratatui::Frame<'_>, state: &ScanUiState) {
         .label(format!("{pct:>5.1}% ({})", state.phase));
     frame.render_widget(gauge, chunks[2]);
 
-    let details = Paragraph::new(vec![
-        Line::from(vec![
+    let mut detail_lines = vec![Line::from(vec![
+        Span::styled("Files: ", Style::default().fg(Color::Gray)),
+        Span::raw(format!("{} / {}", state.files_seen, state.total_files)),
+        Span::styled("  Hashed: ", Style::default().fg(Color::Gray)),
+        Span::styled(
+            state.files_hashed.to_string(),
+            Style::default().fg(Color::Green),
+        ),
+        Span::styled("  Skipped: ", Style::default().fg(Color::Gray)),
+        Span::styled(
+            state.files_skipped.to_string(),
+            Style::default().fg(Color::Red),
+        ),
+    ])];
+
+    if state.concurrent_processing {
+        detail_lines.push(Line::from(vec![Span::styled(
+            "Active tasks:",
+            Style::default().fg(Color::Gray),
+        )]));
+        if state.active_tasks.is_empty() {
+            detail_lines.push(Line::from("  -"));
+        } else {
+            for task in &state.active_tasks {
+                if let Some((step, path)) = task.split_once('|') {
+                    let step_style = if pretty {
+                        Style::default().fg(Color::Rgb(251, 191, 36))
+                    } else {
+                        Style::default()
+                    };
+                    detail_lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(step.trim().to_string(), step_style),
+                        Span::styled(" | ", Style::default().fg(Color::Gray)),
+                        Span::raw(path.trim().to_string()),
+                    ]));
+                } else {
+                    detail_lines.push(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(
+                            task.clone(),
+                            if pretty {
+                                Style::default().fg(Color::Rgb(251, 191, 36))
+                            } else {
+                                Style::default()
+                            },
+                        ),
+                    ]));
+                }
+            }
+        }
+    } else {
+        detail_lines.push(Line::from(vec![
             Span::styled("Step: ", Style::default().fg(Color::Gray)),
             Span::styled(
                 state.current_step.clone(),
@@ -633,85 +698,44 @@ fn draw_scan_ui(frame: &mut ratatui::Frame<'_>, state: &ScanUiState) {
                     Style::default()
                 },
             ),
-        ]),
-        Line::from(vec![
+        ]));
+        detail_lines.push(Line::from(vec![
             Span::styled("Current: ", Style::default().fg(Color::Gray)),
             Span::raw(shorten_path(&state.current_path, 110)),
-        ]),
-        Line::from(vec![
-            Span::styled("Files: ", Style::default().fg(Color::Gray)),
-            Span::raw(format!("{} / {}", state.files_seen, state.total_files)),
-            Span::styled("  Hashed: ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                state.files_hashed.to_string(),
-                Style::default().fg(Color::Green),
-            ),
-            Span::styled("  Skipped: ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                state.files_skipped.to_string(),
-                Style::default().fg(Color::Red),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("Prescan: ", Style::default().fg(Color::Gray)),
-            Span::raw(format!(
-                "files {} | dirs {} | bytes {}",
-                state.prescan_files,
-                state.prescan_dirs,
-                human_bytes(state.prescan_bytes)
-            )),
-        ]),
-        Line::from(vec![
-            Span::styled("Totals: ", Style::default().fg(Color::Gray)),
-            Span::raw(format!(
-                "{} | elapsed {}",
-                human_bytes(state.total_bytes),
-                human_elapsed(state.started_at.elapsed())
-            )),
-        ]),
-        Line::from(vec![
-            Span::styled("Active tasks: ", Style::default().fg(Color::Gray)),
-            Span::raw(
-                state
-                    .active_tasks
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "-".to_string()),
-            ),
-        ]),
-        Line::from(vec![
-            Span::raw("  "),
-            Span::raw(
-                state
-                    .active_tasks
-                    .get(1)
-                    .cloned()
-                    .unwrap_or_else(|| "".to_string()),
-            ),
-        ]),
-        Line::from(vec![
-            Span::raw("  "),
-            Span::raw(
-                state
-                    .active_tasks
-                    .get(2)
-                    .cloned()
-                    .unwrap_or_else(|| "".to_string()),
-            ),
-        ]),
-    ])
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_set(if pretty {
-                border::ROUNDED
-            } else {
-                border::PLAIN
-            })
-            .border_style(border_style)
-            .title(section_title("Details")),
-    )
-    .wrap(Wrap { trim: false });
+        ]));
+    }
+
+    detail_lines.push(Line::from(vec![
+        Span::styled("Prescan: ", Style::default().fg(Color::Gray)),
+        Span::raw(format!(
+            "files {} | dirs {} | bytes {}",
+            state.prescan_files,
+            state.prescan_dirs,
+            human_bytes(state.prescan_bytes)
+        )),
+    ]));
+    detail_lines.push(Line::from(vec![
+        Span::styled("Totals: ", Style::default().fg(Color::Gray)),
+        Span::raw(format!(
+            "{} | elapsed {}",
+            human_bytes(state.total_bytes),
+            human_elapsed(state.started_at.elapsed())
+        )),
+    ]));
+
+    let details = Paragraph::new(detail_lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_set(if pretty {
+                    border::ROUNDED
+                } else {
+                    border::PLAIN
+                })
+                .border_style(border_style)
+                .title(section_title("Details")),
+        )
+        .wrap(Wrap { trim: false });
     frame.render_widget(details, chunks[3]);
 
     let footer = Paragraph::new("Press q or Esc to cancel scan (or Ctrl+C to abort process).")
@@ -851,22 +875,23 @@ impl TerminalProgress {
         };
         let step = progress.current_step.as_deref().unwrap_or("scan");
         let current = shorten_path(&progress.current_path, 38);
-        let active = progress
-            .active_tasks
-            .first()
-            .map(|task| format!("{}: {}", task.step, shorten_path(&task.path, 24)))
-            .unwrap_or_else(|| "-".to_string());
-        let line = format!(
-            "scan {:>5.1}% | files {:>8}/{:<8} | hashed {:>8} | skipped {:>6} | {} | {} | active {}",
+        let mut line = format!(
+            "scan {:>5.1}% | files {:>8}/{:<8} | hashed {:>8} | skipped {:>6} | {} | {}",
             pct,
             progress.files_seen,
             progress.total_files,
             progress.files_hashed,
             progress.files_skipped,
             step,
-            current,
-            active
+            current
         );
+        if let Some(task) = progress.active_tasks.first() {
+            line.push_str(&format!(
+                " | active {}: {}",
+                task.step,
+                shorten_path(&task.path, 24)
+            ));
+        }
         self.render_line(&line);
     }
 
