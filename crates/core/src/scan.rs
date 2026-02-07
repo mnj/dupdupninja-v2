@@ -333,10 +333,9 @@ fn is_linked_file(entry: &walkdir::DirEntry, md: &std::fs::Metadata) -> bool {
 
     #[cfg(windows)]
     {
-        use std::os::windows::fs::MetadataExt;
-        if md.number_of_links().unwrap_or(1) > 1 {
-            return true;
-        }
+        let _ = md;
+        // Some Windows metadata link-count APIs are unstable on older toolchains.
+        // Keep stable behavior by treating only symlinks as linked files on Windows.
     }
 
     false
