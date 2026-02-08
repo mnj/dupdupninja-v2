@@ -24,6 +24,7 @@ use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Gauge, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Terminal;
+use sysinfo::{Pid, ProcessesToUpdate, System};
 
 mod web;
 
@@ -414,6 +415,15 @@ struct ScanUiState {
     started_at: Instant,
     visual_mode: VisualMode,
     concurrent_processing: bool,
+    process_system: System,
+    process_pid: Option<Pid>,
+    process_cpu_pct: Option<f32>,
+    process_rss_bytes: Option<u64>,
+    process_vmem_bytes: Option<u64>,
+    process_threads: Option<usize>,
+    process_children: Option<usize>,
+    process_status: Option<String>,
+    process_runtime_secs: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -431,6 +441,7 @@ impl ScanUiState {
         concurrent_processing: bool,
         snapshots_label: String,
     ) -> Self {
+        let process_pid = sysinfo::get_current_pid().ok();
         Self {
             root,
             db,
@@ -454,6 +465,15 @@ impl ScanUiState {
             started_at: Instant::now(),
             visual_mode,
             concurrent_processing,
+            process_system: System::new_all(),
+            process_pid,
+            process_cpu_pct: None,
+            process_rss_bytes: None,
+            process_vmem_bytes: None,
+            process_threads: None,
+            process_children: None,
+            process_status: None,
+            process_runtime_secs: None,
         }
     }
 
@@ -517,6 +537,7 @@ impl ScanUiState {
 
     fn should_render(&mut self, force: bool) -> bool {
         if force {
+            self.refresh_process_metrics();
             self.last_render = Instant::now();
             return true;
         }
@@ -524,6 +545,7 @@ impl ScanUiState {
         if now.duration_since(self.last_render) < Duration::from_millis(80) {
             return false;
         }
+        self.refresh_process_metrics();
         self.last_render = now;
         true
     }
@@ -533,6 +555,31 @@ impl ScanUiState {
             return 0.0;
         }
         (self.files_seen as f64 / self.total_files as f64).clamp(0.0, 1.0)
+    }
+
+    fn refresh_process_metrics(&mut self) {
+        let Some(pid) = self.process_pid else {
+            return;
+        };
+
+        self.process_system
+            .refresh_processes(ProcessesToUpdate::All, true);
+
+        if let Some(proc_) = self.process_system.process(pid) {
+            self.process_cpu_pct = Some(proc_.cpu_usage());
+            self.process_rss_bytes = Some(proc_.memory());
+            self.process_vmem_bytes = Some(proc_.virtual_memory());
+            self.process_threads = proc_.tasks().map(|tasks| tasks.len());
+            self.process_children = Some(
+                self.process_system
+                    .processes()
+                    .values()
+                    .filter(|p| p.parent() == Some(pid))
+                    .count(),
+            );
+            self.process_status = Some(format!("{:?}", proc_.status()).to_ascii_lowercase());
+            self.process_runtime_secs = Some(proc_.run_time());
+        }
     }
 }
 
@@ -598,7 +645,8 @@ fn draw_scan_ui(frame: &mut ratatui::Frame<'_>, state: &ScanUiState) {
             Constraint::Length(5),
             Constraint::Length(3),
             Constraint::Min(6),
-            Constraint::Length(2),
+            Constraint::Length(3),
+            Constraint::Length(3),
         ])
         .split(frame.area());
 
@@ -716,11 +764,7 @@ fn draw_scan_ui(frame: &mut ratatui::Frame<'_>, state: &ScanUiState) {
         } else {
             for task in &state.active_tasks {
                 if let Some((step, path)) = task.split_once('|') {
-                    let step_style = if pretty {
-                        Style::default().fg(Color::Rgb(251, 191, 36))
-                    } else {
-                        Style::default()
-                    };
+                    let step_style = active_task_step_style(step.trim(), pretty);
                     detail_lines.push(Line::from(vec![
                         Span::raw("  "),
                         Span::styled(step.trim().to_string(), step_style),
@@ -806,6 +850,67 @@ fn draw_scan_ui(frame: &mut ratatui::Frame<'_>, state: &ScanUiState) {
                 .title(section_title("Control")),
         );
     frame.render_widget(footer, chunks[4]);
+
+    let cpu = state
+        .process_cpu_pct
+        .map(|v| format!("{v:.1}%"))
+        .unwrap_or_else(|| "n/a".to_string());
+    let rss = state
+        .process_rss_bytes
+        .map(human_bytes)
+        .unwrap_or_else(|| "n/a".to_string());
+    let vmem = state
+        .process_vmem_bytes
+        .map(human_bytes)
+        .unwrap_or_else(|| "n/a".to_string());
+    let threads = state
+        .process_threads
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "n/a".to_string());
+    let children = state
+        .process_children
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "n/a".to_string());
+    let status = state
+        .process_status
+        .clone()
+        .unwrap_or_else(|| "n/a".to_string());
+    let runtime = state
+        .process_runtime_secs
+        .map(|secs| human_elapsed(Duration::from_secs(secs)))
+        .unwrap_or_else(|| "n/a".to_string());
+    let process_info = Paragraph::new(format!(
+        "cpu {cpu} | rss {rss} | vmem {vmem} | threads {threads} | child procs {children} | status {status} | runtime {runtime}"
+    ))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_set(if pretty {
+                border::ROUNDED
+            } else {
+                border::PLAIN
+            })
+            .border_style(border_style)
+            .title(section_title("Process")),
+    );
+    frame.render_widget(process_info, chunks[5]);
+}
+
+fn active_task_step_style(step: &str, pretty: bool) -> Style {
+    if !pretty {
+        return Style::default();
+    }
+    match step {
+        "blake3" => Style::default().fg(Color::Rgb(34, 197, 94)),
+        "sha256" => Style::default().fg(Color::Rgb(59, 130, 246)),
+        "ffprobe metadata" => Style::default().fg(Color::Rgb(251, 191, 36)),
+        "ahash/dhash/phash" => Style::default().fg(Color::Rgb(244, 114, 182)),
+        "video snapshots" => Style::default().fg(Color::Rgb(168, 85, 247)),
+        "file type" => Style::default().fg(Color::Rgb(16, 185, 129)),
+        "metadata" => Style::default().fg(Color::Rgb(148, 163, 184)),
+        "done" => Style::default().fg(Color::Rgb(250, 204, 21)),
+        _ => Style::default().fg(Color::Rgb(251, 191, 36)),
+    }
 }
 
 fn detect_visual_mode() -> VisualMode {
