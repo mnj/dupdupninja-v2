@@ -296,11 +296,13 @@ where
     }
 
     if effective_concurrency_enabled(config) {
+        const CONCURRENT_PROGRESS_HEARTBEAT: Duration = Duration::from_millis(200);
         let mut active_tasks: BTreeMap<PathBuf, String> = BTreeMap::new();
         let mut completed = 0usize;
         let target = candidates.len();
         let (tx, rx) = mpsc::channel::<WorkerUpdate>();
         let mut cancelled = false;
+        let mut last_heartbeat = Instant::now();
 
         let cfg = config.clone();
         let handle = thread::spawn(move || {
@@ -325,7 +327,28 @@ where
 
             let msg = match rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(v) => v,
-                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if last_heartbeat.elapsed() >= CONCURRENT_PROGRESS_HEARTBEAT {
+                        let (path, step) = active_tasks
+                            .iter()
+                            .next()
+                            .map(|(p, s)| (p.clone(), Some(s.clone())))
+                            .unwrap_or_else(|| (PathBuf::new(), Some("scan".to_string())));
+                        on_progress(&ScanProgress {
+                            files_seen: stats.files_seen,
+                            files_hashed: stats.files_hashed,
+                            files_skipped: stats.files_skipped,
+                            bytes_seen: *bytes_seen,
+                            total_files: totals.files,
+                            total_bytes: totals.bytes,
+                            current_path: path,
+                            current_step: step,
+                            active_tasks: active_task_list(&active_tasks),
+                        });
+                        last_heartbeat = Instant::now();
+                    }
+                    continue;
+                }
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             };
 
@@ -343,6 +366,7 @@ where
                         current_step: Some(step.to_string()),
                         active_tasks: active_task_list(&active_tasks),
                     });
+                    last_heartbeat = Instant::now();
                 }
                 WorkerUpdate::Done(item) => {
                     completed = completed.saturating_add(1);
@@ -376,6 +400,7 @@ where
                         current_step: Some("done".to_string()),
                         active_tasks: active_task_list(&active_tasks),
                     });
+                    last_heartbeat = Instant::now();
 
                     *files_since_flush = files_since_flush.saturating_add(1);
                     if *files_since_flush >= flush_every_files

@@ -46,11 +46,13 @@ pub struct FileListRow {
     pub id: i64,
     pub path: PathBuf,
     pub size_bytes: u64,
+    pub modified_at: Option<SystemTime>,
     pub blake3: Option<[u8; 32]>,
     pub sha256: Option<[u8; 32]>,
     pub ahash: Option<u64>,
     pub dhash: Option<u64>,
     pub phash: Option<u64>,
+    pub ffmpeg_metadata: Option<String>,
     pub file_type: Option<String>,
 }
 

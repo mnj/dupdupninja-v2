@@ -368,7 +368,7 @@ impl SqliteScanStore {
         let id_col = self.file_id_column();
         let sql = format!(
             r#"
-            SELECT {id_col} AS id, path, size_bytes, blake3, sha256, ahash, dhash, phash, file_type
+            SELECT {id_col} AS id, path, size_bytes, modified_at_secs, blake3, sha256, ahash, dhash, phash, ffmpeg_metadata, file_type
             FROM files
             ORDER BY path
             LIMIT ?1 OFFSET ?2
@@ -376,21 +376,24 @@ impl SqliteScanStore {
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![limit as i64, offset as i64], |r| {
-            let blake3: Option<Vec<u8>> = r.get(3)?;
-            let sha256: Option<Vec<u8>> = r.get(4)?;
-            let ahash: Option<i64> = r.get(5)?;
-            let dhash: Option<i64> = r.get(6)?;
-            let phash: Option<i64> = r.get(7)?;
+            let modified_at_secs: Option<i64> = r.get(3)?;
+            let blake3: Option<Vec<u8>> = r.get(4)?;
+            let sha256: Option<Vec<u8>> = r.get(5)?;
+            let ahash: Option<i64> = r.get(6)?;
+            let dhash: Option<i64> = r.get(7)?;
+            let phash: Option<i64> = r.get(8)?;
             Ok(FileListRow {
                 id: r.get(0)?,
                 path: Path::new(r.get::<_, String>(1)?.as_str()).to_path_buf(),
                 size_bytes: r.get::<_, i64>(2)? as u64,
+                modified_at: modified_at_secs.map(|v| secs_to_system_time(v.max(0) as u64)),
                 blake3: blob_to_hash(blake3),
                 sha256: blob_to_hash(sha256),
                 ahash: ahash.map(|v| v as u64),
                 dhash: dhash.map(|v| v as u64),
                 phash: phash.map(|v| v as u64),
-                file_type: r.get(8)?,
+                ffmpeg_metadata: r.get(9)?,
+                file_type: r.get(10)?,
             })
         })?;
 
@@ -409,7 +412,7 @@ impl SqliteScanStore {
         let id_col = self.file_id_column();
         let sql = format!(
             r#"
-            SELECT f1.{id_col} AS id, f1.path, f1.size_bytes, f1.blake3, f1.sha256, f1.ahash, f1.dhash, f1.phash, f1.file_type
+            SELECT f1.{id_col} AS id, f1.path, f1.size_bytes, f1.modified_at_secs, f1.blake3, f1.sha256, f1.ahash, f1.dhash, f1.phash, f1.ffmpeg_metadata, f1.file_type
             FROM files f1
             WHERE (
                 f1.blake3 IS NOT NULL
@@ -431,21 +434,24 @@ impl SqliteScanStore {
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![limit as i64, offset as i64], |r| {
-            let blake3: Option<Vec<u8>> = r.get(3)?;
-            let sha256: Option<Vec<u8>> = r.get(4)?;
-            let ahash: Option<i64> = r.get(5)?;
-            let dhash: Option<i64> = r.get(6)?;
-            let phash: Option<i64> = r.get(7)?;
+            let modified_at_secs: Option<i64> = r.get(3)?;
+            let blake3: Option<Vec<u8>> = r.get(4)?;
+            let sha256: Option<Vec<u8>> = r.get(5)?;
+            let ahash: Option<i64> = r.get(6)?;
+            let dhash: Option<i64> = r.get(7)?;
+            let phash: Option<i64> = r.get(8)?;
             Ok(FileListRow {
                 id: r.get(0)?,
                 path: Path::new(r.get::<_, String>(1)?.as_str()).to_path_buf(),
                 size_bytes: r.get::<_, i64>(2)? as u64,
+                modified_at: modified_at_secs.map(|v| secs_to_system_time(v.max(0) as u64)),
                 blake3: blob_to_hash(blake3),
                 sha256: blob_to_hash(sha256),
                 ahash: ahash.map(|v| v as u64),
                 dhash: dhash.map(|v| v as u64),
                 phash: phash.map(|v| v as u64),
-                file_type: r.get(8)?,
+                ffmpeg_metadata: r.get(9)?,
+                file_type: r.get(10)?,
             })
         })?;
 
@@ -460,7 +466,7 @@ impl SqliteScanStore {
         let id_col = self.file_id_column();
         let sql = format!(
             r#"
-            SELECT {id_col} AS id, path, size_bytes, blake3, sha256, ahash, dhash, phash, file_type
+            SELECT {id_col} AS id, path, size_bytes, modified_at_secs, blake3, sha256, ahash, dhash, phash, ffmpeg_metadata, file_type
             FROM files
             WHERE ahash IS NOT NULL OR dhash IS NOT NULL OR phash IS NOT NULL
             ORDER BY path
@@ -469,21 +475,24 @@ impl SqliteScanStore {
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![limit as i64, offset as i64], |r| {
-            let blake3: Option<Vec<u8>> = r.get(3)?;
-            let sha256: Option<Vec<u8>> = r.get(4)?;
-            let ahash: Option<i64> = r.get(5)?;
-            let dhash: Option<i64> = r.get(6)?;
-            let phash: Option<i64> = r.get(7)?;
+            let modified_at_secs: Option<i64> = r.get(3)?;
+            let blake3: Option<Vec<u8>> = r.get(4)?;
+            let sha256: Option<Vec<u8>> = r.get(5)?;
+            let ahash: Option<i64> = r.get(6)?;
+            let dhash: Option<i64> = r.get(7)?;
+            let phash: Option<i64> = r.get(8)?;
             Ok(FileListRow {
                 id: r.get(0)?,
                 path: Path::new(r.get::<_, String>(1)?.as_str()).to_path_buf(),
                 size_bytes: r.get::<_, i64>(2)? as u64,
+                modified_at: modified_at_secs.map(|v| secs_to_system_time(v.max(0) as u64)),
                 blake3: blob_to_hash(blake3),
                 sha256: blob_to_hash(sha256),
                 ahash: ahash.map(|v| v as u64),
                 dhash: dhash.map(|v| v as u64),
                 phash: phash.map(|v| v as u64),
-                file_type: r.get(8)?,
+                ffmpeg_metadata: r.get(9)?,
+                file_type: r.get(10)?,
             })
         })?;
 
@@ -518,7 +527,7 @@ impl SqliteScanStore {
 
         let sql = format!(
             r#"
-            SELECT {id_col} AS id, path, size_bytes, blake3, sha256, ahash, dhash, phash, file_type
+            SELECT {id_col} AS id, path, size_bytes, modified_at_secs, blake3, sha256, ahash, dhash, phash, ffmpeg_metadata, file_type
             FROM files
             WHERE {hash_col} = ?1 AND {id_col} != ?2
             ORDER BY path
@@ -526,21 +535,24 @@ impl SqliteScanStore {
         );
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![hash, file_id], |r| {
-            let blake3: Option<Vec<u8>> = r.get(3)?;
-            let sha256: Option<Vec<u8>> = r.get(4)?;
-            let ahash: Option<i64> = r.get(5)?;
-            let dhash: Option<i64> = r.get(6)?;
-            let phash: Option<i64> = r.get(7)?;
+            let modified_at_secs: Option<i64> = r.get(3)?;
+            let blake3: Option<Vec<u8>> = r.get(4)?;
+            let sha256: Option<Vec<u8>> = r.get(5)?;
+            let ahash: Option<i64> = r.get(6)?;
+            let dhash: Option<i64> = r.get(7)?;
+            let phash: Option<i64> = r.get(8)?;
             Ok(FileListRow {
                 id: r.get(0)?,
                 path: Path::new(r.get::<_, String>(1)?.as_str()).to_path_buf(),
                 size_bytes: r.get::<_, i64>(2)? as u64,
+                modified_at: modified_at_secs.map(|v| secs_to_system_time(v.max(0) as u64)),
                 blake3: blob_to_hash(blake3),
                 sha256: blob_to_hash(sha256),
                 ahash: ahash.map(|v| v as u64),
                 dhash: dhash.map(|v| v as u64),
                 phash: phash.map(|v| v as u64),
-                file_type: r.get(8)?,
+                ffmpeg_metadata: r.get(9)?,
+                file_type: r.get(10)?,
             })
         })?;
 
