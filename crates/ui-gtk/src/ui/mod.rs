@@ -2,7 +2,7 @@ mod files_list;
 mod state;
 
 use files_list::*;
-use state::{FilesetEntry, UiState, UiUpdate};
+use state::{FilesetEntry, MatchChildData, MatchRootData, UiState, UiUpdate};
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]
 pub fn run() {
@@ -143,25 +143,31 @@ pub fn run() {
         ui_state,
         move |_, _| {
             if let Some(window) = app.active_window() {
-                let (initial_capture, initial_count, initial_max_dim, initial_concurrent) =
-                    ui_state
-                        .borrow()
-                        .as_ref()
-                        .map(|s| {
-                            (
-                                s.capture_snapshots,
-                                s.snapshots_per_video,
-                                s.snapshot_max_dim,
-                                s.concurrent_processing,
-                            )
-                        })
-                        .unwrap_or((true, 3, 1024, true));
+                let (
+                    initial_capture,
+                    initial_count,
+                    initial_max_dim,
+                    initial_concurrent,
+                    initial_similar_match_cap,
+                ) = ui_state
+                    .borrow()
+                    .as_ref()
+                    .map(|s| {
+                        (
+                            s.capture_snapshots,
+                            s.snapshots_per_video,
+                            s.snapshot_max_dim,
+                            s.concurrent_processing,
+                            s.similar_match_cap,
+                        )
+                    })
+                    .unwrap_or((true, 3, 1024, true, 2200));
 
                 let settings_window = gtk::Window::builder()
                     .transient_for(&window)
                     .title("Settings")
                     .default_width(520)
-                    .default_height(240)
+                    .default_height(320)
                     .modal(true)
                     .build();
 
@@ -243,6 +249,25 @@ pub fn run() {
                 row4.append(&concurrent_switch);
                 content.append(&row4);
 
+                let row5 = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+                row5.set_hexpand(true);
+                let label5 = gtk::Label::new(Some("Similar match file cap"));
+                label5.set_xalign(0.0);
+                label5.set_hexpand(true);
+                let similar_cap_adjustment = gtk::Adjustment::new(
+                    initial_similar_match_cap.clamp(200, 20_000) as f64,
+                    200.0,
+                    20_000.0,
+                    100.0,
+                    500.0,
+                    0.0,
+                );
+                let similar_cap_spin =
+                    gtk::SpinButton::new(Some(&similar_cap_adjustment), 100.0, 0);
+                row5.append(&label5);
+                row5.append(&similar_cap_spin);
+                content.append(&row5);
+
                 capture_switch.connect_notify_local(
                     Some("active"),
                     glib::clone!(
@@ -303,6 +328,34 @@ pub fn run() {
                         }
                     ),
                 );
+
+                similar_cap_spin.connect_value_changed(glib::clone!(
+                    #[strong]
+                    ui_state,
+                    move |spin| {
+                        let value = spin.value().round().clamp(200.0, 20_000.0) as usize;
+                        let db_path_to_reload = {
+                            let mut state_ref = ui_state.borrow_mut();
+                            let Some(state) = state_ref.as_mut() else {
+                                return;
+                            };
+                            state.similar_match_cap = value;
+                            state.active_fileset_id.and_then(|active_id| {
+                                state
+                                    .filesets
+                                    .iter()
+                                    .find(|entry| entry.id == active_id)
+                                    .map(|entry| entry.db_path.clone())
+                            })
+                        };
+                        persist_scan_settings_from_ui_state(ui_state.clone());
+                        if let Some(db_path) = db_path_to_reload {
+                            if let Some(state) = ui_state.borrow_mut().as_mut() {
+                                load_fileset_rows(state, &db_path);
+                            }
+                        }
+                    }
+                ));
 
                 let fileset_title = gtk::Label::new(Some("Filesets"));
                 fileset_title.add_css_class("title-3");
@@ -516,26 +569,23 @@ pub fn run() {
         let files_db_path: std::rc::Rc<std::cell::RefCell<Option<std::path::PathBuf>>> =
             std::rc::Rc::new(std::cell::RefCell::new(None));
         let files_root_store = gio::ListStore::new::<gtk4::glib::BoxedAnyObject>();
-        let files_db_path_for_model = files_db_path.clone();
         let files_tree_model =
             gtk::TreeListModel::new(files_root_store.clone(), false, false, move |obj| {
-                let db_path = files_db_path_for_model.borrow().clone()?;
                 let row_item = obj
                     .downcast_ref::<gtk4::glib::BoxedAnyObject>()?
                     .borrow::<RowItem>()
                     .clone();
                 match row_item.kind {
-                    RowKind::File(file) => {
-                        let store = dupdupninja_core::db::SqliteScanStore::open(&db_path).ok()?;
-                        let matches = store.list_direct_matches_by_blake3(file.id).ok()?;
-                        if matches.is_empty() {
+                    RowKind::File { groups, .. } => {
+                        if groups.is_empty() {
                             return None;
                         }
                         let list = gio::ListStore::new::<gtk4::glib::BoxedAnyObject>();
-                        list.append(&gtk4::glib::BoxedAnyObject::new(RowItem::match_group(
-                            format!("Direct matches ({})", matches.len()),
-                            matches,
-                        )));
+                        for (label, matches) in groups {
+                            list.append(&gtk4::glib::BoxedAnyObject::new(RowItem::match_group(
+                                label, matches,
+                            )));
+                        }
                         Some(list.upcast())
                     }
                     RowKind::MatchGroup { matches, .. } => {
@@ -631,11 +681,12 @@ pub fn run() {
             snapshots_per_video: startup_settings.snapshots_per_video,
             snapshot_max_dim: startup_settings.snapshot_max_dim,
             concurrent_processing: startup_settings.concurrent_processing,
+            similar_match_cap: startup_settings.similar_match_cap,
             last_files_refresh: None,
             selected_files: std::collections::HashMap::new(),
             action_bar_label: action_bar.label.clone(),
             action_bar_buttons: action_bar.buttons.clone(),
-            show_only_duplicates: false,
+            files_load_generation: 0,
         });
 
         restore_open_filesets(ui_state_for_activate.clone());
@@ -774,6 +825,54 @@ pub fn run() {
                             if let Some(fileset_id) = state.active_scan_fileset_id.take() {
                                 set_fileset_scanning(state, fileset_id, false);
                             }
+                        }
+                        UiUpdate::FilesLoaded {
+                            fileset_id,
+                            generation,
+                            rows,
+                            note,
+                        } => {
+                            if state.active_fileset_id != Some(fileset_id)
+                                || state.files_load_generation != generation
+                            {
+                                continue;
+                            }
+                            state.files_root_store.remove_all();
+                            let matched_roots = rows.len();
+                            for row in rows {
+                                state
+                                    .files_root_store
+                                    .append(&gtk4::glib::BoxedAnyObject::new(
+                                        RowItem::from_match_root(row),
+                                    ));
+                            }
+                            state.selected_files.clear();
+                            update_action_bar_state(state);
+                            if matched_roots == 0 {
+                                state
+                                    .status_label
+                                    .set_text("Status: No exact/similar matches in this fileset");
+                            } else if let Some(note) = note {
+                                state.status_label.set_text(&format!(
+                                    "Status: Loaded {matched_roots} matched roots ({note})"
+                                ));
+                            } else {
+                                state.status_label.set_text(&format!(
+                                    "Status: Loaded {matched_roots} matched roots"
+                                ));
+                            }
+                        }
+                        UiUpdate::FilesLoadError {
+                            fileset_id,
+                            generation,
+                            text,
+                        } => {
+                            if state.active_fileset_id != Some(fileset_id)
+                                || state.files_load_generation != generation
+                            {
+                                continue;
+                            }
+                            state.status_label.set_text(&text);
                         }
                     }
                 }
@@ -989,6 +1088,7 @@ struct GtkSettings {
     snapshots_per_video: u32,
     snapshot_max_dim: u32,
     concurrent_processing: bool,
+    similar_match_cap: usize,
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]
@@ -1000,6 +1100,7 @@ impl Default for GtkSettings {
             snapshots_per_video: 3,
             snapshot_max_dim: 1024,
             concurrent_processing: true,
+            similar_match_cap: 2200,
         }
     }
 }
@@ -1058,6 +1159,11 @@ fn load_settings() -> GtkSettings {
             "concurrent_processing" => {
                 settings.concurrent_processing = value == "1" || value.eq_ignore_ascii_case("true");
             }
+            "similar_match_cap" => {
+                if let Ok(v) = value.parse::<usize>() {
+                    settings.similar_match_cap = v.clamp(200, 20_000);
+                }
+            }
             _ => {}
         }
     }
@@ -1088,6 +1194,9 @@ fn save_settings(settings: &GtkSettings) -> std::io::Result<()> {
         "0"
     });
     contents.push('\n');
+    contents.push_str("similar_match_cap=");
+    contents.push_str(&settings.similar_match_cap.clamp(200, 20_000).to_string());
+    contents.push('\n');
     if let Some(dir) = &settings.fileset_dir {
         contents.push_str("fileset_dir=");
         contents.push_str(&dir.display().to_string());
@@ -1098,7 +1207,13 @@ fn save_settings(settings: &GtkSettings) -> std::io::Result<()> {
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]
 fn persist_scan_settings_from_ui_state(ui_state: std::rc::Rc<std::cell::RefCell<Option<UiState>>>) {
-    let (capture_snapshots, snapshots_per_video, snapshot_max_dim, concurrent_processing) = {
+    let (
+        capture_snapshots,
+        snapshots_per_video,
+        snapshot_max_dim,
+        concurrent_processing,
+        similar_match_cap,
+    ) = {
         let state = ui_state.borrow();
         let Some(state) = state.as_ref() else {
             return;
@@ -1108,6 +1223,7 @@ fn persist_scan_settings_from_ui_state(ui_state: std::rc::Rc<std::cell::RefCell<
             state.snapshots_per_video,
             state.snapshot_max_dim,
             state.concurrent_processing,
+            state.similar_match_cap,
         )
     };
 
@@ -1116,6 +1232,7 @@ fn persist_scan_settings_from_ui_state(ui_state: std::rc::Rc<std::cell::RefCell<
     settings.snapshots_per_video = snapshots_per_video.clamp(1, 10);
     settings.snapshot_max_dim = snapshot_max_dim.clamp(128, 2048);
     settings.concurrent_processing = concurrent_processing;
+    settings.similar_match_cap = similar_match_cap.clamp(200, 20_000);
     let _ = save_settings(&settings);
 }
 
@@ -1521,45 +1638,226 @@ fn update_fileset_placeholder(state: &mut UiState) {
 #[cfg(all(target_os = "linux", feature = "gtk"))]
 fn load_fileset_rows(state: &mut UiState, db_path: &std::path::Path) {
     state.files_root_store.remove_all();
-    let store = match dupdupninja_core::db::SqliteScanStore::open(db_path) {
-        Ok(store) => store,
-        Err(err) => {
-            state
-                .status_label
-                .set_text(&format!("Status: Failed to open fileset: {err}"));
-            return;
-        }
+    state.selected_files.clear();
+    update_action_bar_state(state);
+    let Some(fileset_id) = state.active_fileset_id else {
+        return;
     };
 
-    let mut offset = 0;
-    let limit = 1000;
-    loop {
-        let rows = match if state.show_only_duplicates {
-            store.list_files_with_duplicates(limit, offset)
-        } else {
-            store.list_files(limit, offset)
-        } {
-            Ok(rows) => rows,
-            Err(err) => {
-                state
-                    .status_label
-                    .set_text(&format!("Status: Failed to load files: {err}"));
-                break;
+    state.files_load_generation = state.files_load_generation.saturating_add(1);
+    let generation = state.files_load_generation;
+    let update_tx = state.update_tx.clone();
+    let db_path = db_path.to_path_buf();
+    let similar_match_cap = state.similar_match_cap.clamp(200, 20_000);
+
+    state
+        .status_label
+        .set_text("Status: Loading exact/similar matches...");
+
+    std::thread::spawn(
+        move || match compute_match_roots(&db_path, similar_match_cap) {
+            Ok((rows, note)) => {
+                let _ = update_tx.send(UiUpdate::FilesLoaded {
+                    fileset_id,
+                    generation,
+                    rows,
+                    note,
+                });
             }
-        };
+            Err(err) => {
+                let _ = update_tx.send(UiUpdate::FilesLoadError {
+                    fileset_id,
+                    generation,
+                    text: format!("Status: Failed to load matches: {err}"),
+                });
+            }
+        },
+    );
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn compute_match_roots(
+    db_path: &std::path::Path,
+    similar_match_cap: usize,
+) -> Result<(Vec<MatchRootData>, Option<String>), String> {
+    const PAGE_SIZE: usize = 1000;
+    const THRESH_AHASH: u32 = 10;
+    const THRESH_DHASH: u32 = 10;
+    const THRESH_PHASH: u32 = 8;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+    enum ExactKey {
+        Blake3([u8; 32]),
+        Sha256([u8; 32]),
+    }
+
+    let store = dupdupninja_core::db::SqliteScanStore::open(db_path).map_err(|e| e.to_string())?;
+    let mut roots: std::collections::HashMap<i64, MatchRootData> = std::collections::HashMap::new();
+
+    let mut exact_rows = Vec::new();
+    let mut exact_offset = 0;
+    loop {
+        let rows = store
+            .list_files_with_duplicates(PAGE_SIZE, exact_offset)
+            .map_err(|e| e.to_string())?;
         if rows.is_empty() {
             break;
         }
-        for row in rows {
-            state
-                .files_root_store
-                .append(&gtk4::glib::BoxedAnyObject::new(RowItem::from_file(row)));
-        }
-        offset += limit;
+        exact_offset += PAGE_SIZE;
+        exact_rows.extend(rows);
     }
 
-    state.selected_files.clear();
-    update_action_bar_state(state);
+    let mut exact_groups: std::collections::HashMap<
+        ExactKey,
+        Vec<dupdupninja_core::models::FileListRow>,
+    > = std::collections::HashMap::new();
+    for row in exact_rows {
+        let key = if let Some(hash) = row.blake3 {
+            Some(ExactKey::Blake3(hash))
+        } else {
+            row.sha256.map(ExactKey::Sha256)
+        };
+        if let Some(key) = key {
+            exact_groups.entry(key).or_default().push(row);
+        }
+    }
+    for (_, mut members) in exact_groups {
+        if members.len() < 2 {
+            continue;
+        }
+        members.sort_by(|a, b| a.path.cmp(&b.path));
+        let anchor = members.remove(0);
+        if members.is_empty() {
+            continue;
+        }
+        insert_match_group(&mut roots, anchor, "Exact matches".to_string(), members);
+    }
+
+    let mut similar_rows = Vec::new();
+    let mut similar_offset = 0;
+    let mut similar_limited = false;
+    'similar_load: loop {
+        let rows = store
+            .list_files_with_hashes(PAGE_SIZE, similar_offset)
+            .map_err(|e| e.to_string())?;
+        if rows.is_empty() {
+            break;
+        }
+        similar_offset += PAGE_SIZE;
+        for row in rows {
+            if similar_rows.len() >= similar_match_cap {
+                similar_limited = true;
+                break 'similar_load;
+            }
+            similar_rows.push(row);
+        }
+    }
+
+    let mut assigned = vec![false; similar_rows.len()];
+    for i in 0..similar_rows.len() {
+        if assigned[i] {
+            continue;
+        }
+        let mut members = Vec::new();
+        for j in (i + 1)..similar_rows.len() {
+            if assigned[j] {
+                continue;
+            }
+            if is_similar(
+                &similar_rows[i],
+                &similar_rows[j],
+                THRESH_AHASH,
+                THRESH_DHASH,
+                THRESH_PHASH,
+            ) {
+                members.push(j);
+            }
+        }
+        if !members.is_empty() {
+            assigned[i] = true;
+            let anchor = similar_rows[i].clone();
+            let mut match_rows = Vec::with_capacity(members.len());
+            for idx in members {
+                assigned[idx] = true;
+                match_rows.push(similar_rows[idx].clone());
+            }
+            insert_match_group(
+                &mut roots,
+                anchor,
+                "Similar matches".to_string(),
+                match_rows,
+            );
+        }
+    }
+
+    let mut rows: Vec<MatchRootData> = roots.into_values().collect();
+    rows.sort_by(|a, b| {
+        b.file
+            .size_bytes
+            .cmp(&a.file.size_bytes)
+            .then_with(|| a.file.path.cmp(&b.file.path))
+    });
+
+    let note = if similar_limited {
+        Some(format!(
+            "similarity search limited to first {similar_match_cap} hashed files"
+        ))
+    } else {
+        None
+    };
+    Ok((rows, note))
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn insert_match_group(
+    roots: &mut std::collections::HashMap<i64, MatchRootData>,
+    anchor: dupdupninja_core::models::FileListRow,
+    label: String,
+    matches: Vec<dupdupninja_core::models::FileListRow>,
+) {
+    if matches.is_empty() {
+        return;
+    }
+    let group = MatchChildData {
+        label: format!("{label} ({})", matches.len()),
+        matches,
+    };
+    if let Some(existing) = roots.get_mut(&anchor.id) {
+        existing.groups.push(group);
+    } else {
+        roots.insert(
+            anchor.id,
+            MatchRootData {
+                file: anchor,
+                groups: vec![group],
+            },
+        );
+    }
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn is_similar(
+    a: &dupdupninja_core::models::FileListRow,
+    b: &dupdupninja_core::models::FileListRow,
+    ahash_threshold: u32,
+    dhash_threshold: u32,
+    phash_threshold: u32,
+) -> bool {
+    if let (Some(left), Some(right)) = (a.phash, b.phash) {
+        return hamming_distance_u64(left, right) <= phash_threshold;
+    }
+    if let (Some(left), Some(right)) = (a.dhash, b.dhash) {
+        return hamming_distance_u64(left, right) <= dhash_threshold;
+    }
+    if let (Some(left), Some(right)) = (a.ahash, b.ahash) {
+        return hamming_distance_u64(left, right) <= ahash_threshold;
+    }
+    false
+}
+
+#[cfg(all(target_os = "linux", feature = "gtk"))]
+fn hamming_distance_u64(a: u64, b: u64) -> u32 {
+    (a ^ b).count_ones()
 }
 
 #[cfg(all(target_os = "linux", feature = "gtk"))]

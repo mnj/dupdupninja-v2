@@ -25,7 +25,7 @@ use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::symbols::border;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Gauge, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Terminal;
 use sysinfo::{Pid, ProcessesToUpdate, System};
 
@@ -1211,6 +1211,7 @@ fn run_matches_command(args: &mut impl Iterator<Item = String>) -> dupdupninja_c
         dupdupninja_core::Error::InvalidArgument("missing --db <path>".to_string())
     })?;
     let store = SqliteScanStore::open(&db)?;
+    let path_resolver = FilesetPathResolver::from_store(&store);
 
     let load_exact = mode.includes_exact();
     let load_similar = mode.includes_similar();
@@ -1245,7 +1246,7 @@ fn run_matches_command(args: &mut impl Iterator<Item = String>) -> dupdupninja_c
             exact,
             similar,
         );
-        if let Err(err) = run_matches_tui(&mut state, &store) {
+        if let Err(err) = run_matches_tui(&mut state, &store, &path_resolver) {
             eprintln!("warning: failed to run matches TUI ({err}); falling back to plain output");
             let groups = state.filtered_groups();
             print_matches_plain(mode, thresholds, &groups);
@@ -1575,7 +1576,7 @@ struct MatchesUiState {
     expanded: HashSet<usize>,
     selected: usize,
     min_confidence: f64,
-    show_full_ffmpeg_metadata: bool,
+    ffmpeg_popup: Option<FfmpegPopupState>,
     status_message: Option<String>,
 }
 
@@ -1584,6 +1585,18 @@ struct SelectedEntryContext {
     path: PathBuf,
     reference_path: PathBuf,
     is_reference: bool,
+}
+
+#[derive(Clone, Debug)]
+struct FilesetPathResolver {
+    root: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug)]
+struct FfmpegPopupState {
+    title: String,
+    lines: Vec<String>,
+    scroll: usize,
 }
 
 impl MatchesUiState {
@@ -1607,7 +1620,7 @@ impl MatchesUiState {
             expanded: HashSet::new(),
             selected: 0,
             min_confidence: 0.0,
-            show_full_ffmpeg_metadata: false,
+            ffmpeg_popup: None,
             status_message: None,
         }
     }
@@ -1733,14 +1746,14 @@ impl MatchesUiState {
         self.mode = mode;
         self.expanded.clear();
         self.selected = 0;
-        self.show_full_ffmpeg_metadata = false;
+        self.ffmpeg_popup = None;
     }
 
     fn adjust_min_confidence(&mut self, delta: f64) {
         self.min_confidence = (self.min_confidence + delta).clamp(0.0, 100.0);
         self.selected = 0;
         self.expanded.clear();
-        self.show_full_ffmpeg_metadata = false;
+        self.ffmpeg_popup = None;
         self.clamp_selection();
     }
 
@@ -1748,12 +1761,8 @@ impl MatchesUiState {
         self.min_confidence = 0.0;
         self.selected = 0;
         self.expanded.clear();
-        self.show_full_ffmpeg_metadata = false;
+        self.ffmpeg_popup = None;
         self.clamp_selection();
-    }
-
-    fn toggle_ffmpeg_details(&mut self) {
-        self.show_full_ffmpeg_metadata = !self.show_full_ffmpeg_metadata;
     }
 
     fn set_status_message(&mut self, msg: impl Into<String>) {
@@ -1769,15 +1778,112 @@ impl MatchesUiState {
         }
         self.expanded.clear();
         self.selected = 0;
-        self.show_full_ffmpeg_metadata = false;
+        self.ffmpeg_popup = None;
         self.clamp_selection();
         Ok(())
     }
+
+    fn is_ffmpeg_popup_open(&self) -> bool {
+        self.ffmpeg_popup.is_some()
+    }
+
+    fn open_ffmpeg_popup_for_selected(&mut self) {
+        let Some(entry) = self.selected_entry() else {
+            self.set_status_message("select a file entry first");
+            return;
+        };
+        let raw = entry
+            .ffmpeg_metadata
+            .unwrap_or_else(|| "No ffmpeg metadata available for this file.".to_string());
+        let mut lines: Vec<String> = raw.lines().map(|line| line.to_string()).collect();
+        if lines.is_empty() {
+            lines.push(raw);
+        }
+        self.ffmpeg_popup = Some(FfmpegPopupState {
+            title: format!("ffmpeg metadata | {}", shorten_path(&entry.path, 80)),
+            lines,
+            scroll: 0,
+        });
+    }
+
+    fn close_ffmpeg_popup(&mut self) {
+        self.ffmpeg_popup = None;
+    }
+
+    fn scroll_ffmpeg_popup(&mut self, delta: isize) {
+        let Some(popup) = self.ffmpeg_popup.as_mut() else {
+            return;
+        };
+        if delta < 0 {
+            popup.scroll = popup.scroll.saturating_sub((-delta) as usize);
+        } else {
+            popup.scroll = popup.scroll.saturating_add(delta as usize);
+        }
+    }
+
+    fn ffmpeg_popup_top(&mut self) {
+        if let Some(popup) = self.ffmpeg_popup.as_mut() {
+            popup.scroll = 0;
+        }
+    }
+
+    fn ffmpeg_popup_bottom(&mut self) {
+        if let Some(popup) = self.ffmpeg_popup.as_mut() {
+            popup.scroll = popup.lines.len().saturating_sub(1);
+        }
+    }
+
+    fn selected_entry(&self) -> Option<MatchEntry> {
+        let groups = self.filtered_groups();
+        let row = self.selected_row()?;
+        let VisibleRow::Entry(gidx, eidx) = row else {
+            return None;
+        };
+        groups.get(gidx)?.entries.get(eidx).cloned()
+    }
+}
+
+impl FilesetPathResolver {
+    fn from_store(store: &SqliteScanStore) -> Self {
+        let root = store
+            .get_fileset_metadata()
+            .ok()
+            .flatten()
+            .and_then(|meta| fileset_root_path(&meta));
+        Self { root }
+    }
+
+    fn resolve_path(&self, stored_path: &Path) -> dupdupninja_core::Result<PathBuf> {
+        if stored_path.is_absolute() {
+            return Ok(stored_path.to_path_buf());
+        }
+        if let Some(root) = &self.root {
+            return Ok(root.join(stored_path));
+        }
+        Err(dupdupninja_core::Error::InvalidArgument(format!(
+            "cannot resolve relative fileset path '{}' without fileset root metadata",
+            stored_path.display()
+        )))
+    }
+}
+
+fn fileset_root_path(meta: &dupdupninja_core::FilesetMetadata) -> Option<PathBuf> {
+    if !meta.root_path.as_os_str().is_empty() {
+        if meta.root_path.is_absolute() {
+            return Some(meta.root_path.clone());
+        }
+        if let Some(parent) = &meta.root_parent_path {
+            return Some(parent.join(&meta.root_path));
+        }
+        return Some(meta.root_path.clone());
+    }
+    meta.root_parent_path.clone()
 }
 
 fn run_matches_tui(
     state: &mut MatchesUiState,
     store: &SqliteScanStore,
+    path_resolver: &FilesetPathResolver,
 ) -> dupdupninja_core::Result<()> {
     let mut terminal = MatchesTui::start()?;
     loop {
@@ -1789,6 +1895,21 @@ fn run_matches_tui(
             if key.kind != KeyEventKind::Press {
                 continue;
             }
+            if state.is_ffmpeg_popup_open() {
+                match key.code {
+                    KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => {
+                        state.close_ffmpeg_popup()
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => state.scroll_ffmpeg_popup(-1),
+                    KeyCode::Down | KeyCode::Char('j') => state.scroll_ffmpeg_popup(1),
+                    KeyCode::PageUp => state.scroll_ffmpeg_popup(-18),
+                    KeyCode::PageDown => state.scroll_ffmpeg_popup(18),
+                    KeyCode::Home => state.ffmpeg_popup_top(),
+                    KeyCode::End => state.ffmpeg_popup_bottom(),
+                    _ => {}
+                }
+                continue;
+            }
             match key.code {
                 KeyCode::Char('q') | KeyCode::Esc => break,
                 KeyCode::Down | KeyCode::Char('j') => state.move_down(),
@@ -1796,15 +1917,19 @@ fn run_matches_tui(
                 KeyCode::Enter => {
                     if key.modifiers.contains(KeyModifiers::SHIFT) {
                         if state.selected_entry_context().is_some() {
-                            state.toggle_ffmpeg_details();
+                            state.open_ffmpeg_popup_for_selected();
                         } else {
                             state.toggle_expand_selected();
                         }
                     } else if let Some(selected) = state.selected_entry_context() {
-                        match reveal_in_file_browser(&selected.path) {
-                            Ok(()) => state.set_status_message(format!(
+                        match path_resolver.resolve_path(&selected.path).and_then(|path| {
+                            reveal_in_file_browser(&path)
+                                .map(|_| path)
+                                .map_err(dupdupninja_core::Error::Io)
+                        }) {
+                            Ok(path) => state.set_status_message(format!(
                                 "opened file manager for {}",
-                                selected.path.display()
+                                path.display()
                             )),
                             Err(err) => state.set_status_message(format!(
                                 "failed to open file manager for {}: {err}",
@@ -1819,10 +1944,14 @@ fn run_matches_tui(
                 KeyCode::Left => state.collapse_selected(),
                 KeyCode::Char('o') | KeyCode::Char('O') => {
                     if let Some(selected) = state.selected_entry_context() {
-                        match reveal_in_file_browser(&selected.path) {
-                            Ok(()) => state.set_status_message(format!(
+                        match path_resolver.resolve_path(&selected.path).and_then(|path| {
+                            reveal_in_file_browser(&path)
+                                .map(|_| path)
+                                .map_err(dupdupninja_core::Error::Io)
+                        }) {
+                            Ok(path) => state.set_status_message(format!(
                                 "opened file manager for {}",
-                                selected.path.display()
+                                path.display()
                             )),
                             Err(err) => state.set_status_message(format!(
                                 "failed to open file manager for {}: {err}",
@@ -1831,20 +1960,29 @@ fn run_matches_tui(
                         }
                     }
                 }
+                KeyCode::Char('f') | KeyCode::Char('F') => {
+                    if state.selected_entry_context().is_some() {
+                        state.open_ffmpeg_popup_for_selected();
+                    }
+                }
                 KeyCode::Delete => {
                     let action = if key.modifiers.contains(KeyModifiers::SHIFT) {
                         FileAction::DeletePermanently
                     } else {
                         FileAction::MoveToTrash
                     };
-                    match handle_selected_file_action(state, store, action) {
+                    match handle_selected_file_action(state, store, path_resolver, action) {
                         Ok(()) => {}
                         Err(err) => state.set_status_message(format!("action failed: {err}")),
                     }
                 }
                 KeyCode::Char('r') | KeyCode::Char('R') => {
-                    match handle_selected_file_action(state, store, FileAction::ReplaceWithSymlink)
-                    {
+                    match handle_selected_file_action(
+                        state,
+                        store,
+                        path_resolver,
+                        FileAction::ReplaceWithSymlink,
+                    ) {
                         Ok(()) => {}
                         Err(err) => state.set_status_message(format!("action failed: {err}")),
                     }
@@ -1872,6 +2010,7 @@ enum FileAction {
 fn handle_selected_file_action(
     state: &mut MatchesUiState,
     store: &SqliteScanStore,
+    path_resolver: &FilesetPathResolver,
     action: FileAction,
 ) -> dupdupninja_core::Result<()> {
     let Some(selected) = state.selected_entry_context() else {
@@ -1881,16 +2020,18 @@ fn handle_selected_file_action(
 
     match action {
         FileAction::MoveToTrash => {
-            move_path_to_trash(&selected.path).map_err(dupdupninja_core::Error::Io)?;
+            let resolved = path_resolver.resolve_path(&selected.path)?;
+            move_path_to_trash(&resolved).map_err(dupdupninja_core::Error::Io)?;
             let _ = store.delete_file_by_path(&selected.path)?;
             state.reload_groups(store)?;
-            state.set_status_message(format!("moved to trash: {}", selected.path.display()));
+            state.set_status_message(format!("moved to trash: {}", resolved.display()));
         }
         FileAction::DeletePermanently => {
-            delete_path_permanently(&selected.path).map_err(dupdupninja_core::Error::Io)?;
+            let resolved = path_resolver.resolve_path(&selected.path)?;
+            delete_path_permanently(&resolved).map_err(dupdupninja_core::Error::Io)?;
             let _ = store.delete_file_by_path(&selected.path)?;
             state.reload_groups(store)?;
-            state.set_status_message(format!("deleted permanently: {}", selected.path.display()));
+            state.set_status_message(format!("deleted permanently: {}", resolved.display()));
         }
         FileAction::ReplaceWithSymlink => {
             if selected.is_reference {
@@ -1903,14 +2044,16 @@ fn handle_selected_file_action(
                 state.set_status_message("cannot symlink a file to itself");
                 return Ok(());
             }
-            replace_with_symlink_and_trash(&selected.path, &selected.reference_path)
+            let resolved_dup = path_resolver.resolve_path(&selected.path)?;
+            let resolved_ref = path_resolver.resolve_path(&selected.reference_path)?;
+            replace_with_symlink_and_trash(&resolved_dup, &resolved_ref)
                 .map_err(dupdupninja_core::Error::Io)?;
             let _ = store.delete_file_by_path(&selected.path)?;
             state.reload_groups(store)?;
             state.set_status_message(format!(
                 "replaced with symlink: {} -> {}",
-                selected.path.display(),
-                selected.reference_path.display()
+                resolved_dup.display(),
+                resolved_ref.display()
             ));
         }
     }
@@ -2215,7 +2358,7 @@ fn draw_matches_ui(frame: &mut ratatui::Frame<'_>, state: &MatchesUiState) {
         .split(frame.area());
 
     let header = Paragraph::new(format!(
-        "dupdupninja matches | mode={} | groups={} | keys: j/k move, Enter expand/open, Shift+Enter ffmpeg, Del trash, Shift+Del delete, r symlink, a/e/s mode, +/- conf, 0 clear, q quit",
+        "dupdupninja matches | mode={} | groups={} | keys: j/k move, Enter expand/open, Shift+Enter/f ffmpeg popup, Del trash, Shift+Del delete, r symlink, a/e/s mode, +/- conf, 0 clear, q quit",
         match state.mode {
             MatchMode::All => "all",
             MatchMode::Exact => "exact",
@@ -2336,7 +2479,7 @@ fn draw_matches_ui(frame: &mut ratatui::Frame<'_>, state: &MatchesUiState) {
         }
         Some(VisibleRow::Entry(gidx, eidx)) => {
             let e = &groups[gidx].entries[eidx];
-            format_match_entry_details(e, state.show_full_ffmpeg_metadata)
+            format_match_entry_details(e)
         }
         None => "No selection".to_string(),
     };
@@ -2354,9 +2497,71 @@ fn draw_matches_ui(frame: &mut ratatui::Frame<'_>, state: &MatchesUiState) {
                 .title("Details"),
         );
     frame.render_widget(details, layout[3]);
+
+    if let Some(popup) = state.ffmpeg_popup.as_ref() {
+        draw_ffmpeg_popup(frame, popup, pretty, border_style);
+    }
 }
 
-fn format_match_entry_details(entry: &MatchEntry, show_full_ffmpeg: bool) -> String {
+fn draw_ffmpeg_popup(
+    frame: &mut ratatui::Frame<'_>,
+    popup: &FfmpegPopupState,
+    pretty: bool,
+    border_style: Style,
+) {
+    let area = centered_rect(88, 78, frame.area());
+    frame.render_widget(Clear, area);
+    let popup_block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(if pretty {
+            border::ROUNDED
+        } else {
+            border::PLAIN
+        })
+        .border_style(border_style)
+        .title("FFmpeg Metadata")
+        .title_bottom(Line::from(
+            "Esc/Enter close | j/k or arrows scroll | PgUp/PgDn/Home/End",
+        ));
+    let content_area = popup_block.inner(area);
+    frame.render_widget(popup_block, area);
+    let max_scroll = popup
+        .lines
+        .len()
+        .saturating_sub(content_area.height as usize);
+    let scroll = popup.scroll.min(max_scroll);
+    let body = format!("{}\n\n{}", popup.title, popup.lines.join("\n"));
+    let paragraph = Paragraph::new(body)
+        .scroll((scroll as u16, 0))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, content_area);
+}
+
+fn centered_rect(
+    width_pct: u16,
+    height_pct: u16,
+    area: ratatui::layout::Rect,
+) -> ratatui::layout::Rect {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - height_pct) / 2),
+            Constraint::Percentage(height_pct),
+            Constraint::Percentage((100 - height_pct) / 2),
+        ])
+        .split(area);
+    let horizontal = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - width_pct) / 2),
+            Constraint::Percentage(width_pct),
+            Constraint::Percentage((100 - width_pct) / 2),
+        ])
+        .split(vertical[1]);
+    horizontal[1]
+}
+
+fn format_match_entry_details(entry: &MatchEntry) -> String {
     let mut lines = Vec::new();
     lines.push(format!("Path: {}", entry.path.display()));
     lines.push(format!("DB file id: {}", entry.file_id));
@@ -2378,13 +2583,10 @@ fn format_match_entry_details(entry: &MatchEntry, show_full_ffmpeg: bool) -> Str
             .unwrap_or("no additional similarity detail")
     ));
     if let Some(ffmpeg) = entry.ffmpeg_metadata.as_deref() {
-        if show_full_ffmpeg {
-            lines.push("ffmpeg metadata (full):".to_string());
-            lines.push(trim_multiline(ffmpeg, 100, 220));
-        } else {
-            lines.push("ffmpeg metadata (preview, Shift+Enter for full):".to_string());
-            lines.push(trim_multiline(ffmpeg, 14, 180));
-        }
+        lines.push(
+            "ffmpeg metadata (preview, Shift+Enter or f opens scrollable popup):".to_string(),
+        );
+        lines.push(trim_multiline(ffmpeg, 14, 180));
     } else {
         lines.push("ffmpeg metadata: n/a".to_string());
     }

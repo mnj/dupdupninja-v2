@@ -11,7 +11,7 @@ use dupdupninja_core::models::{FileListRow, FileSnapshotRecord};
 use dupdupninja_core::MediaFileRecord;
 use image::ImageFormat;
 
-use crate::ui::state::{FileActionButtons, SelectedFile, UiState};
+use crate::ui::state::{FileActionButtons, MatchRootData, SelectedFile, UiState};
 
 pub(crate) struct FileActionBar {
     pub(crate) label: gtk::Label,
@@ -26,7 +26,10 @@ pub(crate) struct RowItem {
 
 #[derive(Clone)]
 pub(crate) enum RowKind {
-    File(FileRow),
+    File {
+        file: FileRow,
+        groups: Vec<(String, Vec<FileRow>)>,
+    },
     MatchGroup {
         label: String,
         matches: Vec<FileRow>,
@@ -45,18 +48,28 @@ pub(crate) struct FileRow {
 }
 
 impl RowItem {
-    pub(crate) fn from_file(row: FileListRow) -> Self {
+    pub(crate) fn from_match_root(row: MatchRootData) -> Self {
+        let groups = row
+            .groups
+            .into_iter()
+            .map(|group| {
+                (
+                    group.label,
+                    group.matches.into_iter().map(FileRow::from).collect(),
+                )
+            })
+            .collect();
         Self {
-            kind: RowKind::File(FileRow::from(row)),
+            kind: RowKind::File {
+                file: FileRow::from(row.file),
+                groups,
+            },
         }
     }
 
-    pub(crate) fn match_group(label: String, matches: Vec<FileListRow>) -> Self {
+    pub(crate) fn match_group(label: String, matches: Vec<FileRow>) -> Self {
         Self {
-            kind: RowKind::MatchGroup {
-                label,
-                matches: matches.into_iter().map(FileRow::from).collect(),
-            },
+            kind: RowKind::MatchGroup { label, matches },
         }
     }
 
@@ -68,7 +81,7 @@ impl RowItem {
 
     fn label(&self) -> String {
         match &self.kind {
-            RowKind::File(file) | RowKind::MatchItem(file) => file
+            RowKind::File { file, .. } | RowKind::MatchItem(file) => file
                 .path
                 .file_name()
                 .and_then(|p| p.to_str())
@@ -80,7 +93,7 @@ impl RowItem {
 
     pub(crate) fn file_ref(&self) -> Option<&FileRow> {
         match &self.kind {
-            RowKind::File(file) | RowKind::MatchItem(file) => Some(file),
+            RowKind::File { file, .. } | RowKind::MatchItem(file) => Some(file),
             RowKind::MatchGroup { .. } => None,
         }
     }
@@ -421,7 +434,9 @@ pub(crate) fn build_file_action_bar(ui_state: Rc<RefCell<Option<UiState>>>) -> F
     label.set_hexpand(true);
     label.set_wrap(true);
 
-    let show_duplicates = gtk::CheckButton::with_label("Show only duplicates");
+    let show_duplicates = gtk::CheckButton::with_label("Show matched files only (exact + similar)");
+    show_duplicates.set_active(true);
+    show_duplicates.set_sensitive(false);
 
     let trash = gtk::Button::with_label("Move to Trash");
     let delete = gtk::Button::with_label("Delete Permanently");
@@ -566,21 +581,6 @@ pub(crate) fn build_file_action_bar(ui_state: Rc<RefCell<Option<UiState>>>) -> F
     let ui_state_for_actions = ui_state.clone();
     compare.connect_clicked(move |_| {
         open_compare_window(&ui_state_for_actions);
-    });
-
-    let ui_state_for_toggle = ui_state.clone();
-    show_duplicates.connect_toggled(move |cb| {
-        let mut state = ui_state_for_toggle.borrow_mut();
-        let Some(state) = state.as_mut() else {
-            return;
-        };
-        state.show_only_duplicates = cb.is_active();
-        if let Some(active_id) = state.active_fileset_id {
-            if let Some(entry) = state.filesets.iter().find(|entry| entry.id == active_id) {
-                let db_path = entry.db_path.clone();
-                crate::ui::load_fileset_rows(state, &db_path);
-            }
-        }
     });
 
     FileActionBar {

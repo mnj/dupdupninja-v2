@@ -7,6 +7,7 @@ use std::time::Instant;
 use adw::ActionRow;
 use gtk4 as gtk;
 
+use dupdupninja_core::models::FileListRow;
 use dupdupninja_core::scan::{ScanCancelToken, ScanTotals};
 use dupdupninja_core::FilesetMetadata;
 
@@ -34,6 +35,18 @@ pub(crate) struct SelectedFile {
     pub(crate) parent_rel_path: PathBuf,
 }
 
+#[derive(Clone)]
+pub(crate) struct MatchChildData {
+    pub(crate) label: String,
+    pub(crate) matches: Vec<FileListRow>,
+}
+
+#[derive(Clone)]
+pub(crate) struct MatchRootData {
+    pub(crate) file: FileListRow,
+    pub(crate) groups: Vec<MatchChildData>,
+}
+
 pub(crate) struct UiState {
     pub(crate) status_label: gtk::Label,
     pub(crate) detail_status_label: gtk::Label,
@@ -57,11 +70,12 @@ pub(crate) struct UiState {
     pub(crate) snapshots_per_video: u32,
     pub(crate) snapshot_max_dim: u32,
     pub(crate) concurrent_processing: bool,
+    pub(crate) similar_match_cap: usize,
     pub(crate) last_files_refresh: Option<Instant>,
     pub(crate) selected_files: HashMap<i64, SelectedFile>,
     pub(crate) action_bar_label: gtk::Label,
     pub(crate) action_bar_buttons: FileActionButtons,
-    pub(crate) show_only_duplicates: bool,
+    pub(crate) files_load_generation: u64,
 }
 
 pub(crate) enum UiUpdate {
@@ -84,6 +98,17 @@ pub(crate) enum UiUpdate {
         fileset_id: u64,
     },
     Error {
+        text: String,
+    },
+    FilesLoaded {
+        fileset_id: u64,
+        generation: u64,
+        rows: Vec<MatchRootData>,
+        note: Option<String>,
+    },
+    FilesLoadError {
+        fileset_id: u64,
+        generation: u64,
         text: String,
     },
 }
