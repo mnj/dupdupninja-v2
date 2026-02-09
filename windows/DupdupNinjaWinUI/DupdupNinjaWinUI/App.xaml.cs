@@ -53,7 +53,7 @@ namespace DupdupNinjaWinUI
             }
         }
 
-        private static void CurrentDomain_UnhandledException(object sender, UnhandledExceptionEventArgs e)
+        private static void CurrentDomain_UnhandledException(object sender, System.UnhandledExceptionEventArgs e)
         {
             var ex = e.ExceptionObject as Exception;
             DiagnosticLog.Error($"AppDomain unhandled exception (terminating={e.IsTerminating})", ex);
