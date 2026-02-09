@@ -1,10 +1,10 @@
 {
   "profiles": {
-    "DupdupNinjaWinUI (Package)": {
-      "commandName": "MsixPackage"
-    },
     "DupdupNinjaWinUI (Unpackaged)": {
       "commandName": "Project"
+    },
+    "DupdupNinjaWinUI (Package)": {
+      "commandName": "MsixPackage"
     }
   }
 }

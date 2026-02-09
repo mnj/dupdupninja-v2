@@ -34,6 +34,7 @@ public sealed partial class MainWindow : Window
 
     public MainWindow()
     {
+        DiagnosticLog.Info("MainWindow ctor start");
         InitializeComponent();
 
         _settingsStore = new AppSettingsStore();
@@ -53,6 +54,7 @@ public sealed partial class MainWindow : Window
 
         Activated += MainWindow_Activated;
         Closed += OnClosed;
+        DiagnosticLog.Info("MainWindow ctor complete");
     }
 
     private async void MainWindow_Activated(object sender, WindowActivatedEventArgs args)

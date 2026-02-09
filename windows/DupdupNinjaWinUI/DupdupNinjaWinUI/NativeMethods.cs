@@ -31,6 +31,7 @@ internal static class NativeMethods
 
         if (runtimeFolder is null)
         {
+            DiagnosticLog.Error($"Unsupported process architecture: {RuntimeInformation.ProcessArchitecture}");
             return IntPtr.Zero;
         }
 
@@ -50,10 +51,21 @@ internal static class NativeMethods
 
             if (File.Exists(candidate))
             {
-                return NativeLibrary.Load(candidate);
+                try
+                {
+                    DiagnosticLog.Info($"Loading native library from: {candidate}");
+                    return NativeLibrary.Load(candidate);
+                }
+                catch (Exception ex)
+                {
+                    DiagnosticLog.Error($"Native library load failed for: {candidate}", ex);
+                }
             }
         }
 
+        DiagnosticLog.Error(
+            "Failed to resolve native library. Tried: " +
+            string.Join(" | ", candidatePaths.Where(p => !string.IsNullOrWhiteSpace(p))));
         return IntPtr.Zero;
     }
 

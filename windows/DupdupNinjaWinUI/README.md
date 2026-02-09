@@ -15,6 +15,16 @@ It is intended to call into the Rust core via the C ABI in `crates/ffi` (`dupdup
 From `windows/DupdupNinjaWinUI`, open `DupdupNinjaWinUI.slnx` in Visual Studio,
 restore NuGet packages, then build and run the `DupdupNinjaWinUI` project.
 
+CLI run (unpackaged, x64):
+
+```powershell
+dotnet run --project .\DupdupNinjaWinUI\DupdupNinjaWinUI.csproj -p:Platform=x64 --launch-profile "DupdupNinjaWinUI (Unpackaged)"
+```
+
+If startup crashes, check:
+
+- `%LOCALAPPDATA%\dupdupninja\winui-startup.log`
+
 ## Notes
 
 - This project is **unpackaged**. The Windows App SDK runtime must be present on the machine.
